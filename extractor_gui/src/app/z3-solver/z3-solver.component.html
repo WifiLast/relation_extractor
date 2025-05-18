@@ -1,0 +1,886 @@
+<div class="z3-container">
+  <h1>Z3 Solver Interface</h1>
+
+  <div class="tab-navigation">
+    <button [class.active]="activeTab === 'solver'" (click)="switchTab('solver')">Solver</button>
+    <button [class.active]="activeTab === 'theorem'" (click)="switchTab('theorem')">Theorem Prover</button>
+    <button [class.active]="activeTab === 'natural'" (click)="switchTab('natural')">Natural Language</button>
+    <button [class.active]="activeTab === 'calculus'" (click)="switchTab('calculus')">Integration & Derivation</button>
+    <button [class.active]="activeTab === 'visual'" (click)="switchTab('visual')">3D Visualization</button>
+    <button [class.active]="activeTab === 'relations'" (click)="switchTab('relations')">Relation Graphs</button>
+  </div>
+
+  <div *ngIf="activeTab === 'solver'">
+    <div class="solver-section">
+      <h2>Solve Equation</h2>
+      <p class="hint">Enter equations like: "x + y > 5, x > 1, y > 1"</p>
+      <div class="input-group">
+        <input type="text" [(ngModel)]="equation" name="equation" #equationInput
+          (blur)="equation = equation.toLowerCase()" placeholder="Enter equation..." autocomplete="off"
+          autocorrect="off" autocapitalize="off" spellcheck="false" />
+        <button (click)="solveEquation()" [disabled]="loading">Solve</button>
+      </div>
+    </div>
+
+    <div class="solver-section">
+      <h2>Add Constraint</h2>
+      <p class="hint">Enter constraints like: "x < 10"</p>
+          <div class="input-group">
+            <input type="text" [(ngModel)]="constraint" name="constraint" #constraintInput
+              (blur)="constraint = constraint.toLowerCase()" placeholder="Enter constraint..." autocomplete="off"
+              autocorrect="off" autocapitalize="off" spellcheck="false" />
+            <button (click)="addConstraint()" [disabled]="loading">Add</button>
+          </div>
+    </div>
+
+    <div class="solver-section">
+      <h2>Check Satisfiability</h2>
+      <button (click)="checkSatisfiability()" [disabled]="loading" class="full-width">Check</button>
+    </div>
+  </div>
+
+  <div *ngIf="activeTab === 'theorem'">
+    <div class="solver-section">
+      <h2>Logic Theorem Prover</h2>
+      <p class="hint">Enter premises and conclusion to prove logical theorems (using Z3)</p>
+
+      <div class="mode-switch">
+        <button [class.active]="premiseMode === 'simple'" (click)="switchToSimpleMode()">Simple Mode</button>
+        <button [class.active]="premiseMode === 'advanced'" (click)="switchToAdvancedMode()">Advanced Mode</button>
+      </div>
+
+      <div class="help-section">
+        <details>
+          <summary>How to use the theorem prover</summary>
+          <div class="help-content">
+            <p>The theorem prover uses Z3 to verify if your conclusion follows from the given premises.</p>
+            <p><strong>Instructions:</strong></p>
+            <ol>
+              <li>Enter each premise as a valid Z3 Python statement</li>
+              <li>The solver object "s" is already created for you</li>
+              <li>Define your sorts, functions, and constants</li>
+              <li>Add axioms to the solver with s.add()</li>
+              <li>Enter your conclusion as a Z3 expression</li>
+            </ol>
+            <p><strong>Example:</strong> To prove "Socrates is mortal" based on the premise that "all humans are mortal"
+              and "Socrates is human":</p>
+            <pre>
+# Premise 1: Define Object sort
+Object = DeclareSort('Object')
+
+# Premise 2: Define Human and Mortal predicates
+Human = Function('Human', Object, BoolSort())
+Mortal = Function('Mortal', Object, BoolSort())
+
+# Premise 3: Define Socrates
+socrates = Const('socrates', Object)
+
+# Premise 4: Define variable x for universal quantification
+x = Const('x', Object)
+
+# Premise 5: All humans are mortal
+s.add(ForAll([x], Implies(Human(x), Mortal(x))))
+
+# Premise 6: Socrates is human
+s.add(Human(socrates))
+
+# Conclusion: Socrates is mortal
+Mortal(socrates)
+            </pre>
+          </div>
+        </details>
+      </div>
+
+      <!-- Simple Mode Interface -->
+      <div *ngIf="premiseMode === 'simple'" class="simple-interface">
+        <div class="examples-bar">
+          <h3>Quick Start Templates</h3>
+          <div class="examples-row">
+            <button (click)="loadSimpleSocratesExample()" class="example-template">Socrates is Mortal</button>
+            <button (click)="loadSetExample()" class="example-template">Set Theory</button>
+            <button (click)="loadFamilyExample()" class="example-template">Family Relations</button>
+            <button (click)="loadTransitivityExample()" class="example-template">Transitivity</button>
+          </div>
+        </div>
+
+        <div class="setup-section">
+          <h3>Domain Setup</h3>
+
+          <div class="form-group">
+            <label>Domain Type:</label>
+            <select [(ngModel)]="simpleModel.domainName" name="domainSelect" class="domain-select">
+              <option value="Object">Object - General purpose objects</option>
+              <option value="Person">Person - For human relations</option>
+              <option value="Set">Set - For set theory</option>
+              <option value="Number">Number - For numerical domains</option>
+              <option value="Location">Location - For spatial reasoning</option>
+              <option value="Time">Time - For temporal reasoning</option>
+              <option value="Custom">Custom - Define your own</option>
+            </select>
+            <input *ngIf="simpleModel.domainName === 'Custom'" type="text" [(ngModel)]="customDomainName"
+              name="customDomainName" #customDomainInput (blur)="customDomainName = customDomainName.toLowerCase()"
+              placeholder="Enter custom domain name..." class="custom-domain-input" />
+          </div>
+
+          <div class="predicates-section">
+            <h4>Predicates</h4>
+            <p class="hint">Predicates are properties or relations that can be true or false for objects (e.g., Human,
+              Mortal)</p>
+            <div *ngFor="let pred of simpleModel.predicates; let i = index; trackBy: trackByIndex"
+              class="predicate-item">
+              <div class="input-group">
+                <input type="text" [(ngModel)]="simpleModel.predicates[i].name" [name]="'predicate' + i"
+                  [id]="'predicate-input-' + i" #predicateInput
+                  (blur)="simpleModel.predicates[i].name = simpleModel.predicates[i].name.toLowerCase()"
+                  placeholder="Predicate name (e.g., Human)" />
+                <button (click)="removePredicate(i)" class="remove-btn">×</button>
+              </div>
+            </div>
+            <button (click)="addPredicate()" class="add-btn">Add Predicate</button>
+            <button (click)="debugPredicates()" class="debug-btn">Debug Predicates</button>
+            <!-- Debug display for predicates -->
+            <div class="debug-display" *ngIf="simpleModel.predicates && simpleModel.predicates.length > 0">
+              <p *ngFor="let pred of simpleModel.predicates; let i = index">
+                Predicate {{i+1}}: "{{pred.name}}"
+              </p>
+            </div>
+          </div>
+
+          <div class="objects-section">
+            <h4>Objects</h4>
+            <p class="hint">Objects are specific entities in your domain (e.g., socrates, plato)</p>
+            <div *ngFor="let obj of simpleModel.objects; let i = index; trackBy: trackByIndex" class="object-item">
+              <div class="input-group">
+                <input type="text" [(ngModel)]="simpleModel.objects[i]" [name]="'object' + i" [id]="'object-input-' + i"
+                  #objectInput (blur)="simpleModel.objects[i] = simpleModel.objects[i].toLowerCase()"
+                  placeholder="Object name (e.g., socrates)" />
+                <button (click)="removeObject(i)" class="remove-btn">×</button>
+              </div>
+            </div>
+            <button (click)="addObject()" class="add-btn">Add Object</button>
+            <button (click)="debugObjects()" class="debug-btn">Debug Objects</button>
+            <!-- Debug display for objects -->
+            <div class="debug-display" *ngIf="simpleModel.objects && simpleModel.objects.length > 0">
+              <p *ngFor="let obj of simpleModel.objects; let i = index">
+                Object {{i+1}}: "{{obj}}"
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="rules-section">
+          <h3>Rules</h3>
+          <p class="hint">Rules define the logical relationships between objects and predicates</p>
+          <div *ngFor="let rule of simpleModel.rules; let i = index; trackBy: trackByIndex" class="rule-item">
+            <div class="rule-header">Rule {{i+1}}</div>
+            <div class="rule-content">
+              <div class="rule-type">
+                <label>Type:</label>
+                <select [(ngModel)]="simpleModel.rules[i].type" [name]="'ruleType' + i"
+                  (blur)="initializeRuleProperties(i)">
+                  <option value="predicate">Predicate Assignment</option>
+                  <option value="implication">Implication</option>
+                  <option value="universal">Universal Statement</option>
+                </select>
+              </div>
+
+              <!-- Predicate Assignment Rule -->
+              <div *ngIf="simpleModel.rules[i].type === 'predicate'" class="rule-form">
+                <select [(ngModel)]="simpleModel.rules[i].predicate" [name]="'rulePredicate' + i">
+                  <option *ngFor="let pred of simpleModel.predicates" [value]="pred.name">{{pred.name}}</option>
+                </select>
+                <span>applies to</span>
+                <select [(ngModel)]="simpleModel.rules[i].object" [name]="'ruleObject' + i">
+                  <option *ngFor="let obj of simpleModel.objects" [value]="obj">{{obj}}</option>
+                </select>
+              </div>
+
+              <!-- Implication Rule -->
+              <div *ngIf="simpleModel.rules[i].type === 'implication'" class="rule-form">
+                <span>If</span>
+                <select [(ngModel)]="simpleModel.rules[i].antecedent!.predicate" [name]="'ruleAntPredicate' + i">
+                  <option *ngFor="let pred of simpleModel.predicates" [value]="pred.name">{{pred.name}}</option>
+                </select>
+                <span>applies to</span>
+                <select [(ngModel)]="simpleModel.rules[i].antecedent!.object" [name]="'ruleAntObject' + i">
+                  <option value="variable">any object</option>
+                  <option *ngFor="let obj of simpleModel.objects" [value]="obj">{{obj}}</option>
+                </select>
+                <span>then</span>
+                <select [(ngModel)]="simpleModel.rules[i].consequent!.predicate" [name]="'ruleConsPredicate' + i">
+                  <option *ngFor="let pred of simpleModel.predicates" [value]="pred.name">{{pred.name}}</option>
+                </select>
+                <span>applies to the same object</span>
+              </div>
+
+              <!-- Universal Statement Rule -->
+              <div *ngIf="simpleModel.rules[i].type === 'universal'" class="rule-form">
+                <span>For all objects,</span>
+                <select [(ngModel)]="simpleModel.rules[i].predicate" [name]="'ruleUniversalPred' + i">
+                  <option *ngFor="let pred of simpleModel.predicates" [value]="pred.name">{{pred.name}}</option>
+                </select>
+                <span>applies to every object</span>
+              </div>
+
+              <button (click)="removeRule(i)" class="remove-btn">Remove Rule</button>
+            </div>
+          </div>
+          <button (click)="addRule()" class="add-btn">Add Rule</button>
+        </div>
+
+        <div class="conclusion-section">
+          <h3>Conclusion</h3>
+          <p class="hint">The statement you want to prove based on your rules</p>
+          <div class="conclusion-form">
+            <select [(ngModel)]="simpleModel.conclusionPredicate" name="conclusionPredicate"
+              (blur)="updateSimpleConclusion()">
+              <option *ngFor="let pred of simpleModel.predicates" [value]="pred.name">{{pred.name}}</option>
+            </select>
+            <span>applies to</span>
+            <select [(ngModel)]="simpleModel.conclusionObject" name="conclusionObject"
+              (blur)="updateSimpleConclusion()">
+              <option *ngFor="let obj of simpleModel.objects" [value]="obj">{{obj}}</option>
+            </select>
+          </div>
+          <!-- Debug display for simple mode conclusion -->
+          <div class="debug-display" *ngIf="simpleModel.conclusionPredicate && simpleModel.conclusionObject">
+            <p>Simple Mode Conclusion: "{{simpleModel.conclusionPredicate}}({{simpleModel.conclusionObject}})"</p>
+          </div>
+        </div>
+
+        <div class="generated-code" *ngIf="showGeneratedCode">
+          <h3>Generated Code</h3>
+          <pre>{{generatedCode}}</pre>
+        </div>
+
+        <div class="actions">
+          <button (click)="generateCode()" class="action-btn">Generate Code</button>
+          <button (click)="toggleGeneratedCode()" class="action-btn">{{showGeneratedCode ? 'Hide' : 'Show'}} Generated
+            Code</button>
+          <button (click)="proveSimpleTheorem()" [disabled]="loading" class="full-width prove-btn">Prove
+            Theorem</button>
+        </div>
+      </div>
+
+      <!-- Advanced Mode Interface -->
+      <div *ngIf="premiseMode === 'advanced'" class="advanced-interface">
+        <div class="theorem-premises">
+          <h3>Premises</h3>
+          <div *ngFor="let premise of premises; let i = index; trackBy: trackByIndex" class="premise-item">
+            <div class="input-group">
+              <input type="text" [(ngModel)]="premises[i]" [name]="'premise' + i" [id]="'premise-input-' + i"
+                #premiseInput (blur)="premises[i] = premises[i].toLowerCase()" placeholder="Enter premise..." />
+              <button (click)="removePremise(i)" class="remove-btn">×</button>
+            </div>
+          </div>
+          <button (click)="addPremise()" class="add-btn">Add Premise</button>
+          <button (click)="debugPremises()" class="debug-btn">Debug Premises</button>
+        </div>
+
+        <div class="theorem-conclusion">
+          <h3>Conclusion</h3>
+          <input type="text" [(ngModel)]="conclusion" name="conclusion" #conclusionInput
+            (blur)="conclusion = conclusion.toLowerCase()" placeholder="Enter conclusion to prove..." />
+        </div>
+
+        <button (click)="proveTheorem()" [disabled]="loading" class="full-width prove-btn">Prove Theorem</button>
+      </div>
+
+      <div class="example-section">
+        <p class="example-title">Example (Socrates is mortal)</p>
+        <button (click)="loadSocratesExample()" class="example-btn">Load Example</button>
+        <button (click)="loadSimpleSocratesExample()" class="example-btn" *ngIf="premiseMode === 'simple'">Load in
+          Simple Mode</button>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="activeTab === 'natural'">
+    <div class="solver-section">
+      <h2>Natural Language Theorem Prover</h2>
+      <p class="hint">Enter logical statements in natural language and convert them to formal logic</p>
+
+      <div class="lemmatization-toggle">
+        <label class="toggle-label">
+          <input type="checkbox" [checked]="useLemmatization" (change)="toggleLemmatization()" class="toggle-checkbox">
+          <span class="toggle-switch"></span>
+          <span class="toggle-text">Use LangChain Lemmatization</span>
+        </label>
+        <div class="toggle-hint" *ngIf="useLemmatization">
+          <small>Lemmatization is enabled. Natural language will be processed to improve logical conversion.</small>
+        </div>
+        <div class="toggle-hint" *ngIf="!useLemmatization">
+          <small>Lemmatization is disabled. Natural language will be used as-is.</small>
+        </div>
+      </div>
+
+      <div class="analysis-button-group">
+        <button (click)="analyzeLogicalStructure()" class="analyze-btn">Analyze Logical Structure</button>
+        <div class="analysis-hint" *ngIf="logicalStructure">
+          <small>Logical structure has been analyzed. Check the console for details.</small>
+        </div>
+      </div>
+
+      <!-- Logical Structure Analysis Display -->
+      <div *ngIf="logicalStructure" class="logical-structure-section">
+        <h3>Logical Structure Analysis</h3>
+
+        <div class="logical-premises">
+          <h4>Premises Structure</h4>
+          <div *ngFor="let premise of logicalStructure?.premises; let i = index" class="logical-item">
+            <div class="logical-type">{{premise.type | titlecase}}</div>
+            <div class="logical-content">
+              <div *ngIf="premise.content.subject">Subject: <strong>{{premise.content.subject}}</strong></div>
+              <div *ngIf="premise.content.predicate">Predicate: <strong>{{premise.content.predicate}}</strong></div>
+              <div *ngIf="premise.content.object">Object: <strong>{{premise.content.object}}</strong></div>
+              <div *ngIf="premise.content.relation">Relation: <strong>{{premise.content.relation}}</strong></div>
+            </div>
+            <div class="logical-original" *ngIf="naturalPremises[i]">
+              <em>Original: "{{naturalPremises[i]}}"</em>
+            </div>
+          </div>
+        </div>
+
+        <div class="logical-conclusion">
+          <h4>Conclusion Structure</h4>
+          <div class="logical-item">
+            <div class="logical-type">{{logicalStructure?.conclusion?.type | titlecase}}</div>
+            <div class="logical-content">
+              <div *ngIf="logicalStructure?.conclusion?.content?.subject">Subject:
+                <strong>{{logicalStructure.conclusion.content.subject}}</strong></div>
+              <div *ngIf="logicalStructure?.conclusion?.content?.predicate">Predicate:
+                <strong>{{logicalStructure.conclusion.content.predicate}}</strong></div>
+              <div *ngIf="logicalStructure?.conclusion?.content?.object">Object:
+                <strong>{{logicalStructure.conclusion.content.object}}</strong></div>
+              <div *ngIf="logicalStructure?.conclusion?.content?.relation">Relation:
+                <strong>{{logicalStructure.conclusion.content.relation}}</strong></div>
+            </div>
+            <div class="logical-original" *ngIf="naturalConclusion">
+              <em>Original: "{{naturalConclusion}}"</em>
+            </div>
+          </div>
+        </div>
+
+        <div class="structure-actions">
+          <button (click)="useAnalyzedStructure()" class="use-structure-btn">Use Analyzed Structure</button>
+        </div>
+      </div>
+
+      <div class="examples-bar">
+        <h3>Example Sentences</h3>
+        <div class="examples-row">
+          <button (click)="loadNaturalSocratesExample()" class="example-template">Socrates is a human and humans are
+            mortal.</button>
+          <button (click)="loadNaturalSetExample()" class="example-template">Set theory example</button>
+          <button (click)="loadNaturalTransitivityExample()" class="example-template">Transitivity example</button>
+        </div>
+        <p class="hint">Note: The Socrates example is fully supported. Others may require more complex parsing.</p>
+      </div>
+
+      <div class="natural-input-section">
+        <h3>Input Statements</h3>
+        <p class="hint">Enter premises and conclusion as natural language sentences</p>
+
+        <!-- Add a new relation extraction section -->
+        <div class="relation-extraction-section">
+          <h4>Relation Extraction</h4>
+          <p class="hint">Extract relations from natural language to visualize in the relation graph</p>
+          
+          <div class="input-group">
+            <textarea [(ngModel)]="relationExtractionText" name="relationExtractionText" 
+                      placeholder="Enter text to extract relations..." 
+                      class="relation-extraction-input"></textarea>
+          </div>
+          
+          <div class="extraction-actions">
+            <button (click)="extractRelations()" [disabled]="loading" class="extract-btn">Extract Relations</button>
+            <button (click)="visualizeExtractedRelations()" [disabled]="!extractedRelations || extractedRelations.length === 0" class="visualize-btn">Visualize Relations</button>
+            <button (click)="saveRelationsToMongoDB()" [disabled]="!extractedRelations || extractedRelations.length === 0" class="save-neo4j-btn mongodb-btn">Save to MongoDB</button>
+          </div>
+          
+          <!-- Neo4j/MongoDB search section -->
+          <div class="neo4j-search-section">
+            <h5>Find Related Relations in Database</h5>
+            <div class="search-inputs">
+              <input [(ngModel)]="neo4jSearchQuery" placeholder="Enter entity or relation..." class="neo4j-search-input" />
+              <button (click)="findRelatedRelationsMongoDB()" class="find-relations-btn mongodb-btn">Find in MongoDB</button>
+              <button (click)="findRelatedRelations()" class="find-relations-btn">Find in Neo4j (Legacy)</button>
+            </div>
+            
+            <!-- Display found relations from database -->
+            <div *ngIf="relatedRelations && relatedRelations.length > 0" class="related-relations">
+              <h6>Related Relations</h6>
+              <div class="relation-list">
+                <div *ngFor="let relation of relatedRelations; let i = index" class="relation-item">
+                  <div class="relation-content">
+                    <span class="relation-subject">{{relation.subject}}</span>
+                    <span class="relation-arrow">→</span>
+                    <span class="relation-relation">{{relation.relation}}</span>
+                    <span class="relation-arrow">→</span>
+                    <span class="relation-object">{{relation.object}}</span>
+                    <button class="relation-use-btn" (click)="useFoundRelation(relation)" title="Use this relation">Use</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Display extracted relations -->
+          <div *ngIf="extractedRelations && extractedRelations.length > 0" class="extracted-relations">
+            <h5>Extracted Relations</h5>
+            <div class="relation-list">
+              <div *ngFor="let relation of extractedRelations; let i = index" class="relation-item">
+                <div class="relation-content">
+                  <input [(ngModel)]="relation.subject" class="relation-subject-input" />
+                  <span class="relation-arrow">→</span>
+                  <input [(ngModel)]="relation.relation" class="relation-relation-input" />
+                  <span class="relation-arrow">→</span>
+                  <input [(ngModel)]="relation.object" class="relation-object-input" />
+                  <button class="relation-remove-btn" (click)="removeRelation(i)" title="Remove relation">×</button>
+                </div>
+                <div class="relation-actions-inline">
+                  <label class="relation-use-label">
+                    <input type="checkbox" [(ngModel)]="relation.useAsPremise" class="relation-use-checkbox" />
+                    Use as premise
+                  </label>
+                  <label class="relation-use-label">
+                    <input type="radio" name="conclusionRadio" [value]="i" [(ngModel)]="selectedConclusionIndex" class="relation-conclusion-radio" />
+                    Use as conclusion
+                  </label>
+                </div>
+              </div>
+              <div class="relation-actions">
+                <button class="relation-add-btn" (click)="addRelation()" title="Add new relation">
+                  <span>+</span> Add Relation
+                </button>
+                <button class="relation-update-btn" (click)="updateExtractedRelations()" title="Apply changes">
+                  Apply Changes
+                </button>
+              </div>
+            </div>
+            <div class="relation-count">
+              <small>{{extractedRelations.length}} relations found using {{extractionMethod}}</small>
+            </div>
+            
+            <!-- Add database save buttons -->
+            <div class="relation-db-actions">
+              <button class="save-relation-btn mongodb-btn" (click)="saveRelationsToMongoDB()" title="Save relations to MongoDB">
+                Save to MongoDB
+              </button>
+              <button class="save-relation-btn" (click)="saveRelationsToNeo4j()" title="Save relations to Neo4j (Legacy)">
+                Save to Neo4j (Legacy)
+              </button>
+            </div>
+            
+            <!-- New section for using relations as premises/conclusion -->
+            <div class="relation-logical-section">
+              <h5>Create Logical Statements</h5>
+              <p class="hint">Convert selected relations to logical statements for the theorem prover</p>
+              
+              <div class="relation-quick-actions">
+                <button class="auto-select-btn" (click)="autoSelectPremises()" title="Auto-select all except conclusion as premises">
+                  Auto-select premises
+                </button>
+              </div>
+              
+              <div class="logical-preview">
+                <div *ngIf="getSelectedPremises().length > 0">
+                  <h6>Selected Premises:</h6>
+                  <ul class="selected-premises-list">
+                    <li *ngFor="let premise of getSelectedPremises()">
+                      {{premise.subject}} {{premise.relation}} {{premise.object}}
+                    </li>
+                  </ul>
+                </div>
+                
+                <div *ngIf="getSelectedConclusion()">
+                  <h6>Selected Conclusion:</h6>
+                  <div class="selected-conclusion">
+                    {{getSelectedConclusion()?.subject}} {{getSelectedConclusion()?.relation}} {{getSelectedConclusion()?.object}}
+                  </div>
+                </div>
+              </div>
+              
+              <div class="relation-to-logic-actions">
+                <button 
+                  class="convert-relations-btn" 
+                  [disabled]="!canConvertRelations()"
+                  (click)="convertRelationsToLogic()"
+                  title="Create logical statements from selected relations">
+                  Use in Theorem Prover
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- End of new relation extraction section -->
+
+        <div class="premises-container">
+          <h4>Premises</h4>
+          <div *ngFor="let premise of naturalPremises; let i = index; trackBy: trackByIndex"
+            class="natural-premise-item">
+            <div class="input-group natural-input">
+              <input type="text" [(ngModel)]="naturalPremises[i]" [name]="'naturalPremise' + i"
+                [id]="'natural-premise-input-' + i" #naturalPremiseInput
+                (blur)="updateNaturalPremise(naturalPremises[i], i)" placeholder="Enter a premise statement..." />
+              <button (click)="removeNaturalPremise(i)" class="remove-btn">×</button>
+            </div>
+            <!-- Show lemmatized text -->
+            <div *ngIf="naturalPremises[i]" class="lemmatized-text">
+              <small>Lemmatized: {{lemmatizeText(naturalPremises[i])}}</small>
+            </div>
+            <!-- Show fully processed text -->
+            <div *ngIf="naturalPremises[i]" class="processed-text">
+              <small>Processed: {{processNaturalLanguage(naturalPremises[i])}}</small>
+            </div>
+          </div>
+          <button (click)="addNaturalPremise()" class="add-btn">Add Premise</button>
+          <button (click)="debugNaturalPremises()" class="debug-btn">Debug Premises</button>
+          <!-- Debug display -->
+          <div class="debug-display" *ngIf="naturalPremises && naturalPremises.length > 0">
+            <p *ngFor="let premise of naturalPremises; let i = index">
+              Premise {{i+1}}: "{{premise}}"
+            </p>
+          </div>
+        </div>
+
+        <div class="conclusion-container">
+          <h4>Conclusion</h4>
+          <input type="text" [(ngModel)]="naturalConclusion" name="naturalConclusion" #naturalConclusionInput
+            (blur)="updateNaturalConclusion(naturalConclusion)" placeholder="Enter a conclusion to prove..."
+            class="natural-conclusion-input" />
+          <!-- Show lemmatized conclusion -->
+          <div *ngIf="naturalConclusion" class="lemmatized-text">
+            <small>Lemmatized: {{lemmatizeText(naturalConclusion)}}</small>
+          </div>
+          <!-- Show fully processed conclusion -->
+          <div *ngIf="naturalConclusion" class="processed-text">
+            <small>Processed: {{processNaturalLanguage(naturalConclusion)}}</small>
+          </div>
+          <button (click)="debugConclusion()" class="debug-btn">Debug Conclusion</button>
+          <!-- Debug display for conclusion -->
+          <div class="debug-display" *ngIf="naturalConclusion !== undefined">
+            <p>Conclusion: "{{naturalConclusion}}"</p>
+          </div>
+        </div>
+
+        <button (click)="convertToLogic()" [disabled]="loading" class="convert-btn">Convert to Logic</button>
+      </div>
+
+      <div *ngIf="convertedLogic" class="converted-logic-section">
+        <h3>Converted Logical Form</h3>
+        <div class="converted-premises">
+          <h4>Premises:</h4>
+          <pre>{{convertedLogic.premises.join('\n')}}</pre>
+        </div>
+        <div class="converted-conclusion">
+          <h4>Conclusion:</h4>
+          <pre>{{convertedLogic.conclusion}}</pre>
+        </div>
+        <div class="actions">
+          <button (click)="useConvertedLogic()" class="action-btn">Use in Theorem Prover</button>
+          <button (click)="proveConvertedLogic()" [disabled]="loading" class="full-width prove-btn">Prove
+            Directly</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="activeTab === 'calculus'">
+    <div class="solver-section">
+      <h2>Calculus Operations with Nerdamer</h2>
+      <p class="hint">Enter an expression for integration or derivation (e.g., "x^2", "sin(x)", "e^x", "log(x)")</p>
+
+      <div class="calculus-input-section">
+        <div class="input-group">
+          <input type="text" [(ngModel)]="calcExpression" name="calcExpression" #calcExpressionInput
+            placeholder="Enter mathematical expression..." autocomplete="off" autocorrect="off" autocapitalize="off"
+            spellcheck="false" />
+        </div>
+
+        <div class="calculus-variable-section">
+          <h4>Settings</h4>
+          <div class="input-row">
+            <label for="variable">Variable:</label>
+            <input type="text" [(ngModel)]="calcVariable" name="calcVariable" #calcVariableInput placeholder="x"
+              value="x" class="small-input" />
+          </div>
+        </div>
+
+        <div class="calculus-operations">
+          <h4>Operations</h4>
+          <div class="operation-buttons">
+            <button (click)="integrate()" [disabled]="loading" class="operation-btn">Integrate</button>
+            <button (click)="differentiate()" [disabled]="loading" class="operation-btn">Differentiate</button>
+            <button (click)="simplify()" [disabled]="loading" class="operation-btn">Simplify</button>
+            <button (click)="expand()" [disabled]="loading" class="operation-btn">Expand</button>
+          </div>
+        </div>
+
+        <div *ngIf="calcResult" class="calculus-result">
+          <h4>Result</h4>
+          <div class="result-display">
+            <div class="result-latex" *ngIf="calcLatex">
+              <h5>LaTeX:</h5>
+              <div class="latex-display">{{ calcLatex }}</div>
+            </div>
+            <div class="result-text">
+              <h5>Expression:</h5>
+              <div class="text-display">{{ calcResult }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add a recovery section for Nerdamer loading issues -->
+        <div *ngIf="!nerdamerLoaded" class="nerdamer-loading-error">
+          <h4>Nerdamer Library Status</h4>
+          <p>The Nerdamer library required for calculus operations is still loading or encountered an error.</p>
+          <button (click)="reloadNerdamerIfNeeded()" class="reload-btn">Reload Library</button>
+        </div>
+      </div>
+
+      <div class="examples-bar">
+        <h3>Example Expressions</h3>
+        <div class="examples-row">
+          <button (click)="loadCalcExample('x^2')" class="example-template">x^2</button>
+          <button (click)="loadCalcExample('sin(x)')" class="example-template">sin(x)</button>
+          <button (click)="loadCalcExample('e^x')" class="example-template">e^x</button>
+          <button (click)="loadCalcExample('log(x)')" class="example-template">log(x)</button>
+          <button (click)="loadCalcExample('(x^2+2*x+1)/(x-1)')" class="example-template">(x^2+2x+1)/(x-1)</button>
+        </div>
+      </div>
+
+      <div class="help-section">
+        <details>
+          <summary>How to use the calculus tools</summary>
+          <div class="help-content">
+            <p>The calculus tab uses Nerdamer to perform symbolic integration, differentiation, and more.</p>
+            <p><strong>Instructions:</strong></p>
+            <ol>
+              <li>Enter a mathematical expression in the input field</li>
+              <li>Set the variable to use (default is 'x')</li>
+              <li>Choose an operation (integrate, differentiate, etc.)</li>
+            </ol>
+            <p><strong>Supported operations:</strong></p>
+            <ul>
+              <li><strong>Integrate:</strong> Finds the indefinite integral of the expression</li>
+              <li><strong>Differentiate:</strong> Finds the derivative of the expression</li>
+              <li><strong>Simplify:</strong> Simplifies the expression algebraically</li>
+              <li><strong>Expand:</strong> Expands the expression (e.g., distributes multiplication over addition)</li>
+            </ul>
+            <p><strong>Example expressions:</strong></p>
+            <ul>
+              <li><code>x^2</code> - Square of x</li>
+              <li><code>sin(x)</code> - Sine function</li>
+              <li><code>e^x</code> - Exponential function</li>
+              <li><code>log(x)</code> - Natural logarithm</li>
+              <li><code>1/(x^2-1)</code> - Rational function</li>
+            </ul>
+
+            <p><strong>Troubleshooting:</strong></p>
+            <ul>
+              <li>If operations don't work, try clicking the "Reload Library" button</li>
+              <li>If you see "not a function" errors, refresh the page and try again</li>
+              <li>Make sure you're connected to the internet as Nerdamer is loaded from a CDN</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div *ngIf="activeTab === 'visual'">
+    <div class="solver-section">
+      <h2>3D Math Visualization with MathBox</h2>
+      <p class="hint">Enter a mathematical expression to visualize in 3D space (e.g., "sin(x) * cos(y)", "x^2 + y^2")
+      </p>
+
+      <div class="visual-input-section">
+        <div class="input-group">
+          <input type="text" [(ngModel)]="visualExpression" name="visualExpression" #visualExpressionInput
+            placeholder="Enter mathematical expression..." autocomplete="off" autocorrect="off" autocapitalize="off"
+            spellcheck="false" />
+          <button (click)="visualize()" [disabled]="loading" class="operation-btn">Visualize</button>
+        </div>
+
+        <div class="visual-settings-section">
+          <h4>Visualization Settings</h4>
+          <div class="input-row">
+            <label for="range">Range:</label>
+            <select (change)="handleRangeChange($event)" class="range-select">
+              <option value="-5,5">-5 to 5 (Default)</option>
+              <option value="-10,10">-10 to 10</option>
+              <option value="-3,3">-3 to 3</option>
+              <option value="-2,2">-2 to 2</option>
+              <option value="-1,1">-1 to 1</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Add a recovery section for MathBox loading issues -->
+        <div *ngIf="!mathboxLoaded" class="mathbox-loading-error">
+          <h4>MathBox Library Status</h4>
+          <p>The MathBox library required for 3D visualization is still loading or encountered an error.</p>
+          <button (click)="loadMathBoxScripts()" class="reload-btn">Reload Library</button>
+        </div>
+      </div>
+
+      <div id="mathbox-container" class="mathbox-container">
+        <!-- Fallback content to ensure the container is visible -->
+        <div *ngIf="!visualizationActive" class="visualization-placeholder">
+          <p>Enter an expression and click "Visualize" to see the 3D graph</p>
+        </div>
+      </div>
+
+      <div class="examples-bar">
+        <h3>Example Expressions</h3>
+        <div class="examples-row">
+          <button (click)="loadVisualExample('sin(x) * cos(y)')" class="example-template">sin(x) * cos(y)</button>
+          <button (click)="loadVisualExample('x^2 + y^2')" class="example-template">x^2 + y^2</button>
+          <button (click)="loadVisualExample('sin(sqrt(x^2 + y^2))')" class="example-template">sin(sqrt(x^2 +
+            y^2))</button>
+          <button (click)="loadVisualExample('cos(x) + sin(y)')" class="example-template">cos(x) + sin(y)</button>
+          <button (click)="loadVisualExample('x * exp(-x^2-y^2)')" class="example-template">x * exp(-x^2-y^2)</button>
+        </div>
+      </div>
+
+      <div class="help-section">
+        <details>
+          <summary>How to use the 3D visualization</summary>
+          <div class="help-content">
+            <p>The 3D visualization tab uses MathBox to create interactive visualizations of mathematical functions.</p>
+            <p><strong>Instructions:</strong></p>
+            <ol>
+              <li>Enter a mathematical expression involving x and y variables</li>
+              <li>Click "Visualize" to see the 3D graph</li>
+              <li>Use your mouse to rotate, zoom, and pan the 3D view</li>
+            </ol>
+            <p><strong>Supported operations:</strong></p>
+            <ul>
+              <li><strong>Basic:</strong> +, -, *, /, ^ (power)</li>
+              <li><strong>Functions:</strong> sin, cos, tan, exp, log, sqrt, abs</li>
+              <li><strong>Constants:</strong> pi, e</li>
+            </ul>
+            <p><strong>Example expressions:</strong></p>
+            <ul>
+              <li><code>sin(x) * cos(y)</code> - Waves pattern</li>
+              <li><code>x^2 + y^2</code> - Circular paraboloid</li>
+              <li><code>sin(sqrt(x^2 + y^2))</code> - Ripple pattern</li>
+              <li><code>cos(x) + sin(y)</code> - Corrugated surface</li>
+              <li><code>x * exp(-x^2-y^2)</code> - Gaussian-like function</li>
+            </ul>
+
+            <p><strong>Controls:</strong></p>
+            <ul>
+              <li>Left-click and drag to rotate the view</li>
+              <li>Right-click and drag to pan</li>
+              <li>Scroll wheel to zoom in/out</li>
+            </ul>
+
+            <p><strong>Troubleshooting:</strong></p>
+            <ul>
+              <li>If visualization doesn't appear, try refreshing the page</li>
+              <li>Make sure your browser supports WebGL</li>
+              <li>If you see errors, check your expression syntax</li>
+              <li>For performance reasons, complex expressions may be slow to render</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add a new tab for relation graphs -->
+  <div *ngIf="activeTab === 'relations'">
+    <div class="solver-section">
+      <h2>Relation Graph Visualization</h2>
+      <p class="hint">Visualize relations and graphs using Sigma.js and graphology (e.g., "A→B→C", "A↔B, B→C")</p>
+
+      <div class="relation-input-section">
+        <div class="input-group">
+          <input type="text" [(ngModel)]="relationExpression" name="relationExpression" #relationExpressionInput
+            placeholder="Enter relation expression..." autocomplete="off" autocorrect="off" autocapitalize="off"
+            spellcheck="false" />
+          <button (click)="visualizeRelation()" [disabled]="loading" class="operation-btn">Visualize</button>
+        </div>
+
+        <div class="relation-settings-section">
+          <h4>Graph Settings</h4>
+          <div class="settings-row">
+            <div class="input-row">
+              <label for="graphLayout">Layout:</label>
+              <select [(ngModel)]="graphLayout" name="graphLayout" class="graph-select">
+                <option value="force">Force-directed (Default)</option>
+                <option value="circular">Circular</option>
+                <option value="tree">Tree</option>
+                <option value="grid">Grid</option>
+              </select>
+            </div>
+            <div class="input-row">
+              <label for="nodeSize">Node Size:</label>
+              <input type="range" [(ngModel)]="nodeSize" name="nodeSize" min="1" max="20" step="1" class="slider" />
+              <span>{{nodeSize}}</span>
+            </div>
+            <div class="input-row">
+              <label class="toggle-label">
+                <input type="checkbox" [(ngModel)]="sizeByConnections" name="sizeByConnections" class="toggle-checkbox">
+                <span class="toggle-switch"></span>
+                <span class="toggle-text">Size nodes by connection count</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add a recovery section for Sigma.js loading issues -->
+        <div *ngIf="!sigmaLoaded" class="sigma-loading-error">
+          <h4>Graph Library Status</h4>
+          <p>The Sigma.js and graphology libraries required for graph visualization are still loading or encountered an
+            error.</p>
+          <button (click)="loadSigmaScripts()" class="reload-btn">Reload Libraries</button>
+        </div>
+      </div>
+
+      <div id="sigma-container" class="sigma-container">
+        <!-- Fallback content to ensure the container is visible -->
+        <div *ngIf="!relationActive" class="visualization-placeholder">
+          <p>Enter a relation expression and click "Visualize" to see the graph</p>
+        </div>
+      </div>
+
+      <div class="examples-bar">
+        <h3>Example Relations</h3>
+        <div class="examples-row">
+          <button (click)="loadRelationExample('A→B→C→D')" class="example-template">Linear Path (A→B→C→D)</button>
+          <button (click)="loadRelationExample('A→B, A→C, B→D, C→D')" class="example-template">Diamond (A→B→D,
+            A→C→D)</button>
+          <button (click)="loadRelationExample('A↔B, B→C, C→D, D→A')" class="example-template">Cycle with
+            Bidirectional</button>
+          <button (click)="loadRelationExample('A→{B,C,D}, B→E, C→E, D→E')" class="example-template">Star and
+            Convergence</button>
+          <button (click)="loadRelationExample('A→B→{C,D,E}→F')" class="example-template">Tree Structure</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="result-section" *ngIf="result || error">
+    <h2>Result</h2>
+    <div class="result" *ngIf="result">{{result}}</div>
+    <div class="error" *ngIf="error">{{error}}</div>
+  </div>
+
+  <div class="history-section" *ngIf="history.length > 0">
+    <div class="history-header">
+      <h2>History</h2>
+      <button class="clear-btn" (click)="clearHistory()">Clear</button>
+    </div>
+    <div class="history-list">
+      <div class="history-item" *ngFor="let item of history; trackBy: trackByIndex">
+        <div class="history-type">{{item.type}}</div>
+        <div class="history-input">{{item.input}}</div>
+        <div class="history-output">{{item.output}}</div>
+      </div>
+    </div>
+  </div>
+</div>
