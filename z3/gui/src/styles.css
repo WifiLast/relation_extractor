@@ -1,0 +1,39 @@
+/* You can add global styles to this file, and also import other style files */
+
+/* Global styles */
+
+/* Prevent MathJax from affecting input fields */
+input, textarea, select {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: normal !important;
+  white-space: pre-wrap !important;
+  word-spacing: normal !important;
+  letter-spacing: normal !important;
+  z-index: 100;
+}
+
+.no-mathjax {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: normal !important;
+  white-space: pre-wrap !important;
+  word-spacing: normal !important;
+  letter-spacing: normal !important;
+}
+
+/* Explicitly tell MathJax to only process math-render elements */
+.math-render {
+  display: block;
+  margin: 5px 0;
+}
+
+/* Add a global style to ensure inputs are not affected by MathJax */
+body .MathJax_Display {
+  z-index: 0;
+}
+
+body input, body textarea, body select {
+  z-index: 100;
+  position: relative;
+}

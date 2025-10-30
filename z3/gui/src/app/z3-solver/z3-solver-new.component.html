@@ -1,0 +1,65 @@
+<div class="z3-container">
+  <h1>Z3 Solver Interface</h1>
+
+  <div class="tab-navigation">
+    <button [class.active]="activeTab === 'solver'" (click)="switchTab('solver')">Solver</button>
+    <button [class.active]="activeTab === 'theorem'" (click)="switchTab('theorem')">Theorem Prover</button>
+    <button [class.active]="activeTab === 'natural'" (click)="switchTab('natural')">Natural Language</button>
+    <button [class.active]="activeTab === 'calculus'" (click)="switchTab('calculus')">Integration & Derivation</button>
+    <button [class.active]="activeTab === 'visual'" (click)="switchTab('visual')">3D Visualization</button>
+    <button [class.active]="activeTab === 'relations'" (click)="switchTab('relations')">Relation Graphs</button>
+  </div>
+  
+  <!-- Natural language tab - Neo4j section -->
+  <div *ngIf="activeTab === 'natural'">
+    <div class="solver-section">
+      <h2>Natural Language Relations</h2>
+      
+      <!-- Neo4j search section -->
+      <div class="neo4j-search-section">
+        <h5>Find Related Relations</h5>
+        <div class="search-inputs">
+          <input [(ngModel)]="neo4jSearchQuery" placeholder="Enter entity or relation..." class="neo4j-search-input" />
+          <button (click)="findRelatedRelations()" class="find-relations-btn">Find Relations</button>
+        </div>
+        
+        <!-- Display found relations from Neo4j -->
+        <div *ngIf="relatedRelations && relatedRelations.length > 0" class="related-relations">
+          <h6>Related Relations</h6>
+          <div class="relation-list">
+            <div *ngFor="let relation of relatedRelations; let i = index" class="relation-item">
+              <div class="relation-content">
+                <span class="relation-subject">{{relation.subject}}</span>
+                <span class="relation-arrow">→</span>
+                <span class="relation-relation">{{relation.relation}}</span>
+                <span class="relation-arrow">→</span>
+                <span class="relation-object">{{relation.object}}</span>
+                <button class="relation-use-btn" (click)="useFoundRelation(relation)" title="Use this relation">Use</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="result-section" *ngIf="result || error">
+    <h2>Result</h2>
+    <div class="result" *ngIf="result">{{result}}</div>
+    <div class="error" *ngIf="error">{{error}}</div>
+  </div>
+
+  <div class="history-section" *ngIf="history.length > 0">
+    <div class="history-header">
+      <h2>History</h2>
+      <button class="clear-btn" (click)="clearHistory()">Clear</button>
+    </div>
+    <div class="history-list">
+      <div class="history-item" *ngFor="let item of history; trackBy: trackByIndex">
+        <div class="history-type">{{item.type}}</div>
+        <div class="history-input">{{item.input}}</div>
+        <div class="history-output">{{item.output}}</div>
+      </div>
+    </div>
+  </div>
+</div>
