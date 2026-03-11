@@ -15,7 +15,7 @@ A web interface for the Z3 theorem prover, built with Angular and Flask.
 1. Install the required Python packages:
 
 ```bash
-pip install flask flask-cors z3-solver
+pip install flask flask-cors z3-solver PyPDF2 mcp
 ```
 
 2. Run the Flask backend:
@@ -25,6 +25,31 @@ python z3_backend.py
 ```
 
 The backend will be available at http://localhost:5000
+
+### MCP Setup
+
+Run the FastMCP server over stdio:
+
+```bash
+python z3_backend_mcp.py
+```
+
+Example MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "z3-backend": {
+      "command": "python",
+      "args": [
+        "/mnt/c/Users/MartinStark/Documents/GitHub/PLS/relation_extractor/z3/z3_backend_mcp.py"
+      ]
+    }
+  }
+}
+```
+
+The MCP server exposes tools for solving equations, managing shared solver constraints, proving theorems, converting natural language to logic, extracting relations, extracting relations from a local PDF path, and saving/finding relations in MongoDB.
 
 ### Frontend Setup
 
