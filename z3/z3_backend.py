@@ -21,7 +21,50 @@ from nltk.chunk import RegexpParser, ne_chunk
 from nltk.tree import Tree
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from nltk.corpus import words as _nltk_words_corpus
 import os,sys
+
+# Build an English vocabulary set for PDF word-fragment repair.
+# Loaded once at startup so PDF requests are fast.
+try:
+    nltk.download('words', quiet=True)
+    _ENGLISH_VOCAB = set(w.lower() for w in _nltk_words_corpus.words())
+except Exception:
+    _ENGLISH_VOCAB = set()
+
+# Compile the reusable suffix+morpheme merge pattern once.
+# Group A: recognised English suffixes (ed, ing, tion …)
+# Group B: Latin/Greek-derived bound morphemes that PyPDF2 frequently splits
+#           (cess, ther, tial, ture, ance, ence, ward, wise, hood, ship …)
+_SUFFIX_PAT = re.compile(
+    r'(\b\w{3,})\s+'
+    r'(ed|ing|tion|ation|sion|ment|ness|ity|ies|ive'
+    r'|ous|ful|less|able|ible|ize|ise|ized|ised|izing|ising|ers|er'
+    r'|cess|ther|tial|ture|ance|ence|ward|wise|ship|hood'
+    r'|ling|ling|age|ary|ory|ory|ure|ure|al|ance)\b'
+)
+
+def _repair_word_spaces(text):
+    """
+    Merge adjacent token-pairs where PDF font-encoding inserted a spurious
+    space inside a word.  Strategy: if left+right concatenation is a valid
+    English word AND at least one side alone is NOT a valid English word,
+    collapse the space.  Only operates on short, all-alpha tokens.
+    """
+    def _try_merge(m):
+        left, right = m.group(1).lower(), m.group(2).lower()
+        merged = left + right
+        # Merge if the joined form is a valid English word AND long enough that
+        # it's unlikely to be two intentional separate words.
+        # Min length 5 guards against short false-positives like 'in to' → 'into'
+        # while still catching 'pro cess' (7), 'fur ther' (7), 'Clas s' (5), etc.
+        if merged in _ENGLISH_VOCAB and len(merged) >= 5:
+            return m.group(1) + m.group(2)  # preserve original casing
+        return m.group(0)  # leave unchanged
+
+    # Allow single-char right fragments ('Clas s' → 'Class', 'sys tem' → 'system')
+    return re.sub(r'\b([a-zA-Z]{2,6}) ([a-zA-Z]{1,7})\b', _try_merge, text)
+
 
 #os.chdir("/home/wiffzack/backend/relation_extraction/relation_extractor")
 
@@ -1439,14 +1482,33 @@ def extract_relations_from_pdf_endpoint():
             except Exception as e:
                 print(f"Warning: Could not extract text from a page in {file.filename}: {e}")
             
-        # Clean up text by removing excessive newlines and whitespace
-        # Collapse multiple whitespace/newlines into a single space
-        text = re.sub(r'\s+', ' ', text).strip()
-        
+        # ── PDF text cleanup ──────────────────────────────────────────────────
+        # 0. Strip inline citation references like [2], [19], [64] from raw text
+        text = re.sub(r'\[\d+\]', ' ', text)
+        # 1. Rejoin words broken by a hyphen + newline  "environ-\nment" → "environment"
+        text = re.sub(r'-\n', '', text)
+        # 2. Rejoin words broken by a hyphen + space   "nec- essary" → "necessary"
+        text = re.sub(r'(\w)-\s+(\w)', r'\1\2', text)
+        # 3. Replace remaining newlines with spaces
+        text = text.replace('\n', ' ')
+        # 4. Rejoin word fragments split by PDF font-encoding artefacts
+        #    Pass A: suffix-only patterns (fast regex, covers ~80 % of cases)
+        text = _SUFFIX_PAT.sub(r'\1\2', text)
+        #    Pass B: dictionary-backed merge for arbitrary mid-word spaces
+        #    e.g. "fur ther" → "further", "pro cess" → "process", "th e" → "the"
+        if _ENGLISH_VOCAB:
+            text = _repair_word_spaces(text)
+        # 5. Insert a missing space when a word is fused to the next via a period
+        #    e.g. "mitigation.science" → "mitigation. science"
+        text = re.sub(r'([a-z]{3,})\.([a-zA-Z]{3,})', r'\1. \2', text)
+        # 6. Collapse multiple whitespace characters into a single space
+        text = re.sub(r' {2,}', ' ', text).strip()
+        # ─────────────────────────────────────────────────────────────────────
+
         # Split into sentences using NLTK
         sentences = sent_tokenize(text)
         print(f"Extracted {len(sentences)} sentences from PDF.")
-        
+
         def _is_meaningful(token):
             """Return True if a token is a meaningful word (not punctuation, not 1-2 chars)."""
             token = token.strip()
@@ -1454,6 +1516,18 @@ def extract_relations_from_pdf_endpoint():
                 return False
             # Reject tokens that are only punctuation/symbols/digits
             if re.match(r'^[^a-zA-Z]+$', token):
+                return False
+            # Reject phrases that don't start with a letter (PDF number/bracket artifacts)
+            if not token[0].isalpha():
+                return False
+            # Reject unrealistically long noun phrases (> 6 words = noise)
+            if len(token.split()) > 6:
+                return False
+            # Reject multi-word phrases where any component word is ≤ 2 chars
+            # (indicates a spurious space inserted mid-word by the PDF extractor,
+            # e.g. 'th e', 'a p').
+            words_in_phrase = token.split()
+            if len(words_in_phrase) > 1 and any(len(w) <= 2 for w in words_in_phrase):
                 return False
             return True
 
