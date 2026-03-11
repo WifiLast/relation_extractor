@@ -5,6 +5,7 @@ from flask_cors import CORS
 import json
 import traceback
 import re
+import PyPDF2
 # Import the relation extraction functions
 from spacy_relation_extract import extract_relations, is_linux, SPACY_AVAILABLE
 import mongo_client  # Import the MongoDB client module instead of Neo4j
@@ -14,7 +15,7 @@ SKIP_NLTK_CHECK = True
 
 # Import NLTK for natural language processing
 import nltk
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.tag import pos_tag
 from nltk.chunk import RegexpParser, ne_chunk
 from nltk.tree import Tree
@@ -1408,6 +1409,89 @@ def extract_relations_endpoint():
         traceback.print_exc()
         return jsonify({"message": f"Error extracting relations: {str(e)}"}), 400
 
+@app.route('/extract_relations_from_pdf', methods=['POST'])
+def extract_relations_from_pdf_endpoint():
+    """
+    Extract relations from a PDF file upload.
+    """
+    try:
+        if 'file' not in request.files:
+            return jsonify({"message": "No file part in the request"}), 400
+            
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({"message": "No selected file"}), 400
+            
+        if not file.filename.lower().endswith('.pdf'):
+            return jsonify({"message": "File must be a PDF"}), 400
+            
+        print(f"Extracting relations from PDF: '{file.filename}'")
+        
+        # Read the PDF file
+        pdf_reader = PyPDF2.PdfReader(file)
+        text = ""
+        for page in pdf_reader.pages:
+            try:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+            except Exception as e:
+                print(f"Warning: Could not extract text from a page in {file.filename}: {e}")
+            
+        # Clean up text by removing excessive newlines and whitespace
+        # Collapse multiple whitespace/newlines into a single space
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Split into sentences using NLTK
+        sentences = sent_tokenize(text)
+        print(f"Extracted {len(sentences)} sentences from PDF.")
+        
+        def _is_meaningful(token):
+            """Return True if a token is a meaningful word (not punctuation, not 1-2 chars)."""
+            token = token.strip()
+            if len(token) <= 2:
+                return False
+            # Reject tokens that are only punctuation/symbols/digits
+            if re.match(r'^[^a-zA-Z]+$', token):
+                return False
+            return True
+
+        all_relations = []
+        for sentence in sentences:
+            if len(sentence.strip()) > 10:  # Skip very short fragments
+                relations = extract_relations(sentence)
+                for subj, rel, obj in relations:
+                    # Filter out garbage relations with meaningless tokens
+                    if _is_meaningful(subj) and _is_meaningful(rel) and _is_meaningful(obj):
+                        all_relations.append({
+                            "subject": subj,
+                            "relation": rel,
+                            "object": obj,
+                            "source_sentence": sentence
+                        })
+        
+        # Include method information
+        method = "spaCy" if is_linux() and SPACY_AVAILABLE else "NLTK"
+        
+        print(f"Found {len(all_relations)} relations in PDF:")
+        for relation in all_relations[:5]: # print first 5 for debug
+            print(f"  {relation['subject']} --[{relation['relation']}]--> {relation['object']}")
+        if len(all_relations) > 5:
+            print(f"  ... and {len(all_relations) - 5} more.")
+            
+        return jsonify({
+            "method": method,
+            "sentences_processed": len(sentences),
+            "relations": all_relations,
+            "filename": file.filename
+        }), 200
+        
+    except Exception as e:
+        print(f"Error extracting relations from PDF: {e}")
+        traceback.print_exc()
+        return jsonify({"message": f"Error extracting relations from PDF: {str(e)}"}), 500
+
 # Direct endpoint for saving relations (duplicate of /mongodb/save_relations for compatibility)
 @app.route('/save_relations', methods=['POST', 'OPTIONS'])
 def save_relations_direct():
@@ -1614,8 +1698,8 @@ if __name__ == '__main__':
         
         # Run with HTTPS on port 5123
         print("[SSL] Starting Z3 backend with HTTPS on port 5123...")
-        app.run(host='0.0.0.0', port=5999, debug=True, threaded=True, ssl_context=ssl_context)
+        app.run(host='0.0.0.0', port=5999, debug=True, threaded=True, use_reloader=False, ssl_context=ssl_context)
     else:
         print(f"[SSL] Certificates not found at {cert_dir}")
         print("[SSL] Running without SSL on HTTP...")
-        app.run(host='0.0.0.0', port=5999, debug=True, threaded=True)
+        app.run(host='0.0.0.0', port=5999, debug=True, threaded=True, use_reloader=False)
