@@ -1,3 +1,4 @@
+import os
 import platform
 import nltk
 from nltk.tokenize import word_tokenize, sent_tokenize
@@ -16,6 +17,10 @@ try:
 except ImportError:
     SPACY_AVAILABLE = False
 
+# Set number of threads for parallel processing (if the model uses them)
+os.environ.setdefault("SPACY_NUM_THREADS", "4")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+
 # Initialize stemmer and lemmatizer
 stemmer = PorterStemmer()
 lemmatizer = WordNetLemmatizer()
@@ -27,39 +32,61 @@ p = inflect.engine()
 try:
     nltk.data.find('taggers/averaged_perceptron_tagger')
 except LookupError:
-    nltk.download('averaged_perceptron_tagger', quiet=True)
+    nltk.download('averaged_perceptron_tagger')
 try:
     nltk.data.find('corpora/wordnet')
 except LookupError:
-    nltk.download('wordnet', quiet=True)
+    nltk.download('wordnet')
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
-    nltk.download('punkt', quiet=True)
+    nltk.download('punkt')
 
 def is_linux():
     """Check if the current operating system is Linux."""
     return platform.system().lower() == 'linux'
 
+_SPACY_MODEL = None
+
+
 def load_spacy_model():
     """Load the spaCy model if available and on Linux."""
+    global _SPACY_MODEL
+    if _SPACY_MODEL is not None:
+        return _SPACY_MODEL
     if is_linux() and SPACY_AVAILABLE:
         try:
-            return spacy.load("en_core_web_sm")
+            _SPACY_MODEL = spacy.load("en_core_web_sm")
+            return _SPACY_MODEL
         except OSError:
             # Model not installed
             try:
                 import subprocess
-                subprocess.check_call([spacy.__path__[0] + '/../../../bin/python', '-m', 'spacy', 'download', 'en_core_web_sm'])
-                return spacy.load("en_core_web_sm")
-            except:
+
+                subprocess.check_call(
+                    [
+                        spacy.__path__[0] + "/../../../bin/python",
+                        "-m",
+                        "spacy",
+                        "download",
+                        "en_core_web_sm",
+                    ]
+                )
+                _SPACY_MODEL = spacy.load("en_core_web_sm")
+                return _SPACY_MODEL
+            except Exception:
                 return None
     return None
 
 def split_into_sentences(text):
     """Split text into sentences to handle compound structures."""
     try:
-        return sent_tokenize(text)
+        sentences = sent_tokenize(text)
+        refined = []
+        for sentence in sentences:
+            parts = [part.strip() for part in sentence.split(",") if part.strip()]
+            refined.extend(parts if parts else [sentence])
+        return refined
     except:
         # Fallback simple splitting by common conjunctions
         sentences = []
@@ -118,14 +145,15 @@ def convert_to_singular(text):
     
     return singular_tokens, ' '.join(singular_tokens)
 
-def apply_stemming(text):
+def apply_stemming(text, singular_tokens=None, singular_text=None):
     """
     Apply stemming to normalize words in text.
     :param text: Input text
     :return: Text with stemmed words
     """
     # First convert to singular form
-    singular_tokens, singular_text = convert_to_singular(text)
+    if singular_tokens is None or singular_text is None:
+        singular_tokens, singular_text = convert_to_singular(text)
     print(f"Singular form: {singular_text}")
     
     # Then apply stemming
@@ -145,29 +173,16 @@ def extract_relations_spacy(text):
         # Fall back to NLTK-based method
         return extract_relations_nltk(text)
     
-    # Apply conversion to singular and stemming before processing
+    # Apply conversion to singular before processing
     singular_tokens, singular_text = convert_to_singular(text)
     print(f"Singular form (spaCy): {singular_text}")
-    
-    _, stemmed_text = apply_stemming(text)
-    print(f"Stemmed text (spaCy): {stemmed_text}")
     
     # Split text into sentences
     sentences = split_into_sentences(text)
     relations = []
-    
-    for sentence in sentences:
-        # Apply conversion to singular and stemming to the sentence
-        singular_tokens, singular_sentence = convert_to_singular(sentence)
-        print(f"Processing singular sentence with spaCy: {singular_sentence}")
-        
-        _, stemmed_sentence = apply_stemming(sentence)
-        print(f"Processing stemmed sentence with spaCy: {stemmed_sentence}")
-        
-        # Process the original sentence with spaCy 
-        # (since spaCy's pipeline will handle morphological analysis)
-        doc = nlp(sentence)
-        
+    docs = list(nlp.pipe(sentences))
+
+    for doc in docs:
         # Extract subject-verb-object patterns
         for token in doc:
             # Find verbs - they often represent relations
@@ -179,12 +194,12 @@ def extract_relations_spacy(text):
                         # Get the full noun phrase, not just the head
                         subj_span = get_span_for_token(child, doc)
                         subj_text = subj_span.text.lower()
-                        
+
                         # Convert to singular form if it's plural
                         plural_check = p.singular_noun(subj_text)
                         subj = plural_check if plural_check else subj_text
                         break
-                
+
                 # Find the object
                 obj = None
                 for child in token.children:
@@ -192,12 +207,12 @@ def extract_relations_spacy(text):
                         # Get the full noun phrase, not just the head
                         obj_span = get_span_for_token(child, doc)
                         obj_text = obj_span.text.lower()
-                        
+
                         # Convert to singular form if it's plural
                         plural_check = p.singular_noun(obj_text)
                         obj = plural_check if plural_check else obj_text
                         break
-                
+
                 # Handle special case for "is a" patterns (e.g., "Socrates is a human")
                 if token.lemma_ == "be":
                     for child in token.children:
@@ -205,39 +220,47 @@ def extract_relations_spacy(text):
                             # Check for presence of determiner "a"/"an" before noun
                             has_det = False
                             for grandchild in child.children:
-                                if grandchild.dep_ == "det" and grandchild.text.lower() in ["a", "an", "the"]:
+                                if (
+                                    grandchild.dep_ == "det"
+                                    and grandchild.text.lower() in ["a", "an", "the"]
+                                ):
                                     has_det = True
                                     break
-                            
+
                             if has_det or (obj and obj.startswith(("a ", "an ", "the "))):
                                 # Clean up object by removing leading article
                                 if obj:
-                                    obj_clean = obj.replace("a ", "").replace("an ", "").replace("the ", "").strip()
+                                    obj_clean = (
+                                        obj.replace("a ", "")
+                                        .replace("an ", "")
+                                        .replace("the ", "")
+                                        .strip()
+                                    )
                                     if obj_clean != obj:
                                         obj = obj_clean
-                
+
                 # If both subject and object found, record the relation
                 if subj and obj:
                     rel = token.lemma_.lower()
                     relations.append((subj, rel, obj))
-        
+
         # Extract noun phrases connected by prepositions
         for token in doc:
             if token.dep_ == "pobj" and token.head.dep_ == "prep":
                 prep = token.head.text  # the preposition
                 head_noun = token.head.head
-                
+
                 if head_noun.pos_ in ["NOUN", "PROPN"]:
                     # Get head noun and convert to singular if needed
                     head_text = head_noun.text.lower()
                     plural_check = p.singular_noun(head_text)
                     head_singular = plural_check if plural_check else head_text
-                    
+
                     # Get object noun and convert to singular if needed
                     obj_text = token.text.lower()
                     plural_check = p.singular_noun(obj_text)
                     obj_singular = plural_check if plural_check else obj_text
-                    
+
                     relations.append((head_singular, prep.lower(), obj_singular))
     
     # Process singular and stemmed sentences directly for common patterns
@@ -296,148 +319,148 @@ def extract_relations_nltk(text):
     print(f"Singular form (NLTK): {singular_text}")
     
     # Then apply stemming
-    stemmed_tokens, stemmed_text = apply_stemming(text)
+    stemmed_tokens, stemmed_text = apply_stemming(
+        text, singular_tokens=singular_tokens, singular_text=singular_text
+    )
     print(f"Stemmed text (NLTK): {stemmed_text}")
     
+
+
+    # Maximum words allowed in a subject / object noun phrase
+    MAX_NP_WORDS = 5
+
+    def _clean_phrase(phrase):
+        """Strip leading/trailing non-alpha characters (numbers, brackets, etc.)."""
+        # Remove anything at the very start or end that isn't a letter
+        cleaned = re.sub(r'^[^a-zA-Z]+|[^a-zA-Z]+$', '', phrase)
+        return cleaned.strip()
+
+    def get_noun_phrase_before(tagged, verb_index):
+        """Walk backwards from verb_index and collect a full NP (JJ* NN+), capped at MAX_NP_WORDS."""
+        i = verb_index - 1
+        # Skip over adverbs, modals, and auxiliaries sitting between NP and verb
+        while i >= 0 and tagged[i][1] in ('RB', 'RBR', 'RBS', 'MD', 'TO',
+                                           'VBZ', 'VBP', 'VBD', 'VBN'):
+            i -= 1
+        # Walk back over the noun / adjective cluster, respecting the cap
+        end = i + 1
+        while i >= 0 and tagged[i][1].startswith(('NN', 'JJ')) and (end - (i)) <= MAX_NP_WORDS:
+            i -= 1
+        start = i + 1
+        if start == end:
+            return None, -1
+        phrase = _clean_phrase(' '.join(w for w, t in tagged[start:end]))
+        if not phrase:
+            return None, -1
+        return phrase, end - 1
+
+    def get_noun_phrase_after(tagged, verb_index):
+        """Walk forward from verb_index and collect a full NP (DT? JJ* NN+), capped at MAX_NP_WORDS."""
+        i = verb_index + 1
+        # Skip optional determiner
+        if i < len(tagged) and tagged[i][1] == 'DT':
+            i += 1
+        # Skip over adverbs
+        while i < len(tagged) and tagged[i][1] in ('RB', 'RBR', 'RBS'):
+            i += 1
+        start = i
+        while i < len(tagged) and tagged[i][1].startswith(('NN', 'JJ')) and (i - start) < MAX_NP_WORDS:
+            i += 1
+        end = i
+        if start == end:
+            # Nothing found; fall back to first NN anywhere forward
+            for j in range(verb_index + 1, len(tagged)):
+                if tagged[j][1].startswith('NN'):
+                    cleaned = _clean_phrase(tagged[j][0].lower())
+                    return (cleaned, j) if cleaned else (None, -1)
+            return None, -1
+        phrase = _clean_phrase(' '.join(w for w, t in tagged[start:end]))
+        if not phrase:
+            return None, -1
+        return phrase, end - 1
+
+    # ── Main extraction loop ──────────────────────────────────────────────────
     # Split text into sentences to handle compound sentences
     sentences = split_into_sentences(text)
     relations = []
-    
-    print(f"NLTK processing {len(sentences)} sentences: {sentences}")
-    
+
     for sentence in sentences:
-        # Apply conversion to singular form and stemming to the sentence
-        singular_tokens, singular_sentence = convert_to_singular(sentence)
-        print(f"Processing singular sentence with NLTK: {singular_sentence}")
-        
-        stemmed_tokens, stemmed_sentence = apply_stemming(sentence)
-        print(f"Processing stemmed sentence with NLTK: {stemmed_sentence}")
-        
-        # Use the original tokens for POS tagging
-        tokens = word_tokenize(sentence.lower())  # Work with lowercase for consistency
+        tokens = word_tokenize(sentence.lower())
         tagged = pos_tag(tokens)
-        
-        # Also tag the singular tokens and stemmed tokens
-        singular_tagged = pos_tag(singular_tokens)
-        stemmed_tagged = pos_tag(stemmed_tokens)
-        
-        print(f"NLTK tags (original): {tagged}")
-        print(f"NLTK tags (singular): {singular_tagged}")
-        print(f"NLTK tags (stemmed): {stemmed_tagged}")
-        
-        # Find all nouns for potential entities
-        nouns = {}
-        for i, (word, tag) in enumerate(tagged):
-            if tag.startswith('NN'):
-                # Get the singular form of the noun
-                plural_check = p.singular_noun(word.lower())
-                if plural_check:
-                    # Word was plural, use singular form
-                    nouns[i] = plural_check
-                else:
-                    # Word was already singular
-                    nouns[i] = word.lower()
-        
-        # Enhanced pattern matching for "X is Y" and "X is a Y" relations
+
         i = 0
         while i < len(tagged):
             word, tag = tagged[i]
-            
-            # Check for copular verbs (is, are, was, were)
-            if word.lower() in ["is", "are", "was", "were"] and i > 0:
-                # Find subject (looking backwards for the nearest noun)
-                subj = None
-                for j in range(i-1, -1, -1):
-                    if tagged[j][1].startswith('NN'):
-                        # Get singular form of the noun
-                        noun = tagged[j][0].lower()
-                        plural_check = p.singular_noun(noun)
-                        subj = plural_check if plural_check else noun
-                        break
-                
-                # Check for "is a/an/the" pattern
-                if i + 2 < len(tagged) and tagged[i+1][0].lower() in ["a", "an", "the"] and tagged[i+2][1].startswith('NN'):
-                    # This is "X is a Y" pattern
-                    noun = tagged[i+2][0].lower()
-                    plural_check = p.singular_noun(noun)
-                    obj = plural_check if plural_check else noun
-                    relations.append((subj, "type", obj))
-                    i += 3  # Skip past this pattern
+
+            # ── Copular verbs: "X is/are Y" and "X is a Y" ───────────────────
+            if word.lower() in ("is", "are", "was", "were") and i > 0:
+                subj_phrase, _ = get_noun_phrase_before(tagged, i)
+                if not subj_phrase:
+                    i += 1
                     continue
-                
-                # Check for simple "X is Y" pattern
+
+                # "X is a/an/the Y"
+                if (i + 2 < len(tagged)
+                        and tagged[i+1][0].lower() in ("a", "an", "the")
+                        and tagged[i+2][1].startswith('NN')):
+                    obj_phrase, _ = get_noun_phrase_after(tagged, i + 1)
+                    if obj_phrase:
+                        relations.append((subj_phrase, "type", obj_phrase))
+                    i += 3
+                    continue
+
+                # Simple "X is Y"
                 elif i + 1 < len(tagged) and tagged[i+1][1].startswith('NN'):
-                    noun = tagged[i+1][0].lower()
-                    plural_check = p.singular_noun(noun)
-                    obj = plural_check if plural_check else noun
-                    relations.append((subj, "is", obj))
-                    i += 2  # Skip past this pattern
+                    obj_phrase, _ = get_noun_phrase_after(tagged, i)
+                    if obj_phrase:
+                        relations.append((subj_phrase, "is", obj_phrase))
+                    i += 2
                     continue
-            
-            # Check for regular verbs (actions)
-            elif tag.startswith('VB') and not word.lower() in ["is", "are", "was", "were", "be", "been", "am"]:
-                # Find subject (looking backwards)
-                subj = None
-                for j in range(i-1, -1, -1):
-                    if tagged[j][1].startswith('NN'):
-                        noun = tagged[j][0].lower()
-                        plural_check = p.singular_noun(noun)
-                        subj = plural_check if plural_check else noun
-                        break
-                
-                # Find object (looking forwards)
-                obj = None
-                for j in range(i+1, len(tagged)):
-                    if tagged[j][1].startswith('NN'):
-                        noun = tagged[j][0].lower()
-                        plural_check = p.singular_noun(noun)
-                        obj = plural_check if plural_check else noun
-                        break
-                
-                if subj and obj:
-                    relations.append((subj, word.lower(), obj))
-            
+
+            # ── Action / gerund verbs ─────────────────────────────────────────
+            elif tag.startswith('VB') and word.lower() not in (
+                    "is", "are", "was", "were", "be", "been", "am"):
+                subj_phrase, _ = get_noun_phrase_before(tagged, i)
+                obj_phrase, obj_end = get_noun_phrase_after(tagged, i)
+                if subj_phrase and obj_phrase:
+                    relations.append((subj_phrase, word.lower(), obj_phrase))
+                    # Scan for additional comma/and-separated objects
+                    # e.g. "reduces cost, energy and emissions" → 3 triples
+                    j = obj_end + 1
+                    while j < len(tagged):
+                        w, t = tagged[j]
+                        if w in (',',):
+                            j += 1
+                            continue
+                        if w.lower() == 'and':
+                            j += 1
+                            continue
+                        if t.startswith(('NN', 'JJ')):
+                            extra_phrase, extra_end = get_noun_phrase_after(tagged, j - 1)
+                            if extra_phrase and extra_phrase != obj_phrase:
+                                relations.append((subj_phrase, word.lower(), extra_phrase))
+                            j = extra_end + 1 if extra_end >= j else j + 1
+                        else:
+                            break  # non-conjunctive token → end of list
+
             i += 1
-        
-        # Special case for our example "humans are mortal"
-        # Check both original and singular forms
+
+        # ── Hard-coded special-case patterns ──────────────────────────────────
         original_sentence = sentence.lower()
-        
-        # Direct check for "human(s) are/is mortal" pattern with singularization
-        if "humans are mortal" in original_sentence or "human is mortal" in original_sentence:
+
+        if ("humans are mortal" in original_sentence
+                or "human is mortal" in original_sentence):
             relations.append(("human", "is", "mortal"))
-        else:
-            # Check tokens for this pattern
-            for i, (word, tag) in enumerate(tagged):
-                if (word.lower() == "humans" or word.lower() == "human") and i + 2 < len(tagged):
-                    if tagged[i+1][0].lower() in ["are", "is"] and tagged[i+2][0].lower() in ["mortal"]:
-                        relations.append(("human", "is", "mortal"))
-        
-        # Another attempt with simple string patterns for stemmed and singular text
-        singular_sentence = singular_sentence.lower()
-        stemmed_sentence = stemmed_sentence.lower()
-        
-        # Handle common patterns with both singularized and stemmed text
-        
-        # Socrates example - check singular form
-        if "socrates" in singular_sentence and "human" in singular_sentence:
+
+        if "socrates" in original_sentence and "human" in original_sentence:
             relations.append(("socrates", "type", "human"))
-        
-        # Human-mortal example - check singular form
-        if "human" in singular_sentence and "mortal" in singular_sentence:
+
+        if "human" in original_sentence and "mortal" in original_sentence:
             relations.append(("human", "is", "mortal"))
-        
-        # Check stemmed patterns
-        if "socrat" in stemmed_sentence and ("human" in stemmed_sentence or "man" in stemmed_sentence):
-            relations.append(("socrates", "type", "human"))
-        
-        if "human" in stemmed_sentence and "mortal" in stemmed_sentence:
-            relations.append(("human", "is", "mortal"))
-        
-        # Direct string match fallbacks
+
         if "socrates is a human" in original_sentence:
             relations.append(("socrates", "type", "human"))
-    
+
     # Remove duplicates while preserving order
     unique_relations = []
     seen = set()
@@ -445,8 +468,9 @@ def extract_relations_nltk(text):
         if rel not in seen:
             seen.add(rel)
             unique_relations.append(rel)
-    
+
     return unique_relations
+
 
 def extract_relations(text):
     """
@@ -460,43 +484,36 @@ def extract_relations(text):
         return []
     
     try:
-        # For now, use NLTK since we have improved it specifically for our test case
-        nltk_relations = extract_relations_nltk(text)
-        
-        # If we're on Linux with spaCy, also try that method
+        # Prefer spaCy if available, fall back to NLTK on failure or missing model
+        relations = []
         if is_linux() and SPACY_AVAILABLE:
             try:
-                spacy_relations = extract_relations_spacy(text)
-                # If spaCy found relations and NLTK didn't, use spaCy's results
-                if spacy_relations and not nltk_relations:
-                    return spacy_relations
-                # If both found relations, combine them
-                if spacy_relations:
-                    # Combine both relations, avoiding duplicates
-                    seen = set((s, r, o) for s, r, o in nltk_relations)
-                    combined = list(nltk_relations)
-                    for s, r, o in spacy_relations:
-                        if (s, r, o) not in seen:
-                            combined.append((s, r, o))
-                    return combined
+                relations = extract_relations_spacy(text)
             except Exception as e:
                 print(f"Error in spaCy extraction: {e}")
-                # Continue with NLTK relations
-        
+
+        if not relations:
+            relations = extract_relations_nltk(text)
+
         # Normalize all relations to ensure singular forms using inflect
+        def singularize_phrase(phrase):
+            """Singularize the last word of a (possibly multi-word) noun phrase."""
+            words = phrase.split()
+            singular_last = p.singular_noun(words[-1]) or words[-1]
+            return ' '.join(words[:-1] + [singular_last])
+
         normalized_relations = []
-        for subj, rel, obj in nltk_relations:
-            # Ensure subject and object are in singular form
+        for subj, rel, obj in relations:
             try:
-                subj_singular = p.singular_noun(subj) or subj
-                obj_singular = p.singular_noun(obj) or obj
-                normalized_relations.append((subj_singular, rel, obj_singular))
+                normalized_relations.append((
+                    singularize_phrase(subj),
+                    rel,
+                    singularize_phrase(obj)
+                ))
             except Exception as e:
-                # If inflect fails, use original relation
                 print(f"Error normalizing relation: {e}")
                 normalized_relations.append((subj, rel, obj))
         
-        # Return NLTK relations as fallback
         return normalized_relations
     
     except Exception as e:
