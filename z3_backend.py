@@ -1,13 +1,11 @@
-from flask import Flask, request, jsonify
 from z3 import *
-from flask import request, Blueprint, flash, json
-from flask_cors import CORS
+from mcp.server.fastmcp import FastMCP
 import json
 import traceback
 import re
 # Import the relation extraction functions
 from spacy_relation_extract import extract_relations, is_linux, SPACY_AVAILABLE
-import mongo_client  # Import the MongoDB client module instead of Neo4j
+# import mongo_client  # MongoDB disabled
 
 
 # Import NLTK for natural language processing
@@ -25,34 +23,34 @@ try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt')
-    
+
 try:
     nltk.data.find('taggers/averaged_perceptron_tagger')
 except LookupError:
     nltk.download('averaged_perceptron_tagger')
-    
+
 try:
     nltk.data.find('chunkers/maxent_ne_chunker')
 except LookupError:
     nltk.download('maxent_ne_chunker')
-    
+
 try:
     nltk.data.find('corpora/words')
 except LookupError:
     nltk.download('words')
-    
+
 try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
     nltk.download('stopwords')
-    
+
 try:
     nltk.data.find('corpora/wordnet')
 except LookupError:
     nltk.download('wordnet')
 
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes with more permissive settings
+# Initialize the MCP server with HTTP transport
+mcp = FastMCP("z3_backend")
 
 # Global solver context for maintaining state between requests
 solver_context = {
@@ -1194,187 +1192,173 @@ def detect_negation_patterns(text):
     
     return result
 
-@app.route('/solver', methods=['POST'])
-def create_solver():
+@mcp.tool()
+def solver(equation: str) -> dict:
+    """Solve a Z3 equation and return the result."""
     try:
-        cache = request.get_data()
-        cache_json = json.loads(cache)
-        equation = cache_json['equation']
         result = solve_equation(equation)
-        return jsonify({"message": str(result)}), 200
+        return {"message": str(result)}
     except Exception as e:
         print(f"Error in create_solver: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error: {str(e)}"}), 400
+        return {"message": f"Error: {str(e)}"}
 
-@app.route('/add_constraint', methods=['POST'])
-def add_constraint():
+@mcp.tool()
+def add_constraint(constraint: str) -> dict:
+    """Add a constraint to the Z3 solver."""
     try:
-        data = request.json
-        constraint = data.get('constraint')
-        
         if not constraint:
-            return jsonify({"message": "No constraint provided"}), 400
-            
+            return {"message": "No constraint provided"}
+
         # Get or create the solver context
         if not solver_context['solver']:
             reset_solver_context()
-            
+
         # Parse the constraint to extract variable names
         b = "-+/*=><1234567890, "
         cache = constraint
         for char in b:
             cache = cache.replace(char, "")
         single_cache = set(cache)
-        
+
         # Create Z3 variables in the context
         for entry in single_cache:
             if entry not in solver_context['variables']:
                 solver_context['variables'][entry] = Real(entry)
-        
+
         # Add the constraint to the solver
         locals_dict = {**solver_context['variables']}
         solver_context['solver'].add(eval(constraint.strip(), globals(), locals_dict))
         solver_context['constraints'].append(constraint)
-        
-        return jsonify({
-            "message": "Constraint added", 
+
+        return {
+            "message": "Constraint added",
             "constraint": constraint,
             "constraints": solver_context['constraints']
-        }), 200
+        }
     except Exception as e:
         print(f"Error adding constraint: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error adding constraint: {str(e)}"}), 400
+        return {"message": f"Error adding constraint: {str(e)}"}
 
-@app.route('/check_satisfiability', methods=['POST'])
-def check_satisfiability():
+@mcp.tool()
+def check_satisfiability() -> dict:
+    """Check the satisfiability of the current constraints."""
     try:
         # Ensure we have a solver
         if not solver_context['solver']:
-            return jsonify({"message": "No constraints have been added yet"}), 400
-            
+            return {"message": "No constraints have been added yet"}
+
         # Check satisfiability
         result = solver_context['solver'].check()
-        
+
         if result == sat:
             model = solver_context['solver'].model()
             assignments = {}
             for var_name, var in solver_context['variables'].items():
                 if var in model:
                     assignments[var_name] = str(model[var])
-            
-            return jsonify({
+
+            return {
                 "message": "Satisfiable",
                 "model": assignments,
                 "constraints": solver_context['constraints']
-            }), 200
+            }
         elif result == unsat:
-            return jsonify({
+            return {
                 "message": "Unsatisfiable - no solution exists for the given constraints",
                 "constraints": solver_context['constraints']
-            }), 200
+            }
         else:
-            return jsonify({
+            return {
                 "message": "Unknown - Z3 could not determine satisfiability",
                 "constraints": solver_context['constraints']
-            }), 200
+            }
     except Exception as e:
         print(f"Error checking satisfiability: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error checking satisfiability: {str(e)}"}), 400
+        return {"message": f"Error checking satisfiability: {str(e)}"}
 
-@app.route('/reset_solver', methods=['POST'])
-def reset_solver_endpoint():
+@mcp.tool()
+def reset_solver() -> dict:
+    """Reset the Z3 solver context."""
     try:
         reset_solver_context()
-        return jsonify({"message": "Solver context reset successfully"}), 200
+        return {"message": "Solver context reset successfully"}
     except Exception as e:
         print(f"Error resetting solver: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error resetting solver: {str(e)}"}), 400
+        return {"message": f"Error resetting solver: {str(e)}"}
 
-@app.route('/prove_theorem', methods=['POST'])
-def theorem_prover_endpoint():
+@mcp.tool()
+def prove_theorem_tool(premises: list[str], conclusion: str) -> dict:
+    """Prove a theorem given premises and a conclusion."""
     try:
-        data = request.json
-        premises = data.get('premises', [])
-        conclusion = data.get('conclusion', '')
-        
         if not premises:
-            return jsonify({"message": "No premises provided"}), 400
-            
+            return {"message": "No premises provided"}
+
         if not conclusion:
-            return jsonify({"message": "No conclusion provided"}), 400
-        
+            return {"message": "No conclusion provided"}
+
         result = prove_theorem(premises, conclusion)
-        return jsonify({"message": str(result)}), 200
+        return {"message": str(result)}
     except Exception as e:
         print(f"Error in theorem prover: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error proving theorem: {str(e)}"}), 400
+        return {"message": f"Error proving theorem: {str(e)}"}
 
-@app.route('/convert_natural_language', methods=['POST'])
-def convert_natural_language_endpoint():
+@mcp.tool()
+def convert_natural_language(premises: list[str], conclusion: str, use_lemmatization: bool = False) -> dict:
+    """Convert natural language premises and conclusion to Z3 logic."""
     try:
-        data = request.json
-        premises = data.get('premises', [])
-        conclusion = data.get('conclusion', '')
-        use_lemmatization = data.get('useLemmatization', False)
-        
         if not premises:
-            return jsonify({"message": "No premises provided"}), 400
-            
+            return {"message": "No premises provided"}
+
         if not conclusion:
-            return jsonify({"message": "No conclusion provided"}), 400
-        
+            return {"message": "No conclusion provided"}
+
         # Log the received data with lemmatization info
         print(f"Received natural language with lemmatization={use_lemmatization}")
         print(f"Premises: {premises}")
         print(f"Conclusion: {conclusion}")
-        
+
         converted = natural_language_to_logic(premises, conclusion)
-        return jsonify(converted), 200
+        return converted
     except Exception as e:
         print(f"Error converting natural language: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error converting natural language: {str(e)}"}), 400
+        return {"message": f"Error converting natural language: {str(e)}"}
 
-@app.route('/status', methods=['GET'])
-def status():
-    """Return the current status of the solver context"""
+@mcp.tool()
+def get_status() -> dict:
+    """Return the current status of the solver context."""
     try:
         constraints_count = len(solver_context['constraints'])
         variables_count = len(solver_context['variables'])
-        
-        return jsonify({
+
+        return {
             "status": "active" if solver_context['solver'] else "inactive",
             "constraints_count": constraints_count,
             "variables_count": variables_count,
             "constraints": solver_context['constraints']
-        }), 200
+        }
     except Exception as e:
         print(f"Error getting status: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error getting status: {str(e)}"}), 400
+        return {"message": f"Error getting status: {str(e)}"}
 
-@app.route('/extract_relations', methods=['POST'])
-def extract_relations_endpoint():
-    """
-    Extract relations from a sentence using spaCy on Linux or NLTK as fallback.
-    """
+@mcp.tool()
+def extract_relations_tool(sentence: str) -> dict:
+    """Extract relations from a sentence using spaCy on Linux or NLTK as fallback."""
     try:
-        data = request.json
-        sentence = data.get('sentence', '')
-        
         if not sentence:
-            return jsonify({"message": "No sentence provided"}), 400
-        
+            return {"message": "No sentence provided"}
+
         print(f"Extracting relations from: '{sentence}'")
-        
+
         # Extract relations
         relations = extract_relations(sentence)
-        
+
         # Format the response
         formatted_relations = []
         for subj, rel, obj in relations:
@@ -1383,209 +1367,42 @@ def extract_relations_endpoint():
                 "relation": rel,
                 "object": obj
             })
-        
+
         # Include method information
         method = "spaCy" if is_linux() and SPACY_AVAILABLE else "NLTK"
-        
+
         # Print debug info
         print(f"Method used: {method}")
         print(f"Found {len(formatted_relations)} relations:")
         for relation in formatted_relations:
             print(f"  {relation['subject']} --[{relation['relation']}]--> {relation['object']}")
-        
-        return jsonify({
+
+        return {
             "method": method,
             "relations": formatted_relations,
             "sentence": sentence
-        }), 200
+        }
     except Exception as e:
         print(f"Error extracting relations: {e}")
         traceback.print_exc()
-        return jsonify({"message": f"Error extracting relations: {str(e)}"}), 400
+        return {"message": f"Error extracting relations: {str(e)}"}
 
-# Direct endpoint for saving relations (duplicate of /mongodb/save_relations for compatibility)
-@app.route('/save_relations', methods=['POST', 'OPTIONS'])
-def save_relations_direct():
-    # Handle OPTIONS request for CORS preflight
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'success'})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST')
-        return response
-        
-    try:
-        data = request.json
-        
-        if not data or not isinstance(data, list):
-            return jsonify({"error": "Invalid data format. Expected a list of relations."}), 400
-        
-        success_count = 0
-        failed_relations = []
-        
-        for relation in data:
-            try:
-                # Extract data from the relation
-                source_node = relation.get('source_node')
-                target_node = relation.get('target_node')
-                relation_type = relation.get('relation_type')
-                properties = relation.get('properties')
-                
-                # Validate required fields
-                if not source_node or not target_node or not relation_type:
-                    failed_relations.append({
-                        "relation": relation,
-                        "error": "Missing required fields (source_node, target_node, or relation_type)"
-                    })
-                    continue
-                
-                # Save the relation to MongoDB
-                saved = mongo_client.save_relation(source_node, target_node, relation_type, properties)
-                
-                if saved:
-                    success_count += 1
-                else:
-                    failed_relations.append({
-                        "relation": relation,
-                        "error": "Failed to save relation"
-                    })
-            except Exception as e:
-                failed_relations.append({
-                    "relation": relation,
-                    "error": str(e)
-                })
-        
-        response = jsonify({
-            "success": True,
-            "message": f"Successfully saved {success_count} relations to MongoDB",
-            "success_count": success_count,
-            "failed_count": len(failed_relations),
-            "failed_relations": failed_relations
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 200
-        
-    except Exception as e:
-        print(f"Error saving relations: {e}")
-        traceback.print_exc()
-        response = jsonify({"error": f"Error saving relations: {str(e)}"})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 500
+@mcp.tool()
+def save_relations(relations: list[dict]) -> dict:
+    """Save relations to MongoDB (DISABLED)."""
+    return {
+        "error": "MongoDB is disabled",
+        "message": "Relation storage is not available. MongoDB support has been disabled."
+    }
 
-# Update for MongoDB
-@app.route('/mongodb/save_relations', methods=['POST', 'OPTIONS'])
-def save_relations():
-    # Handle OPTIONS request for CORS preflight
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'success'})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST')
-        return response
-        
-    try:
-        data = request.json
-        
-        if not data or not isinstance(data, list):
-            return jsonify({"error": "Invalid data format. Expected a list of relations."}), 400
-        
-        success_count = 0
-        failed_relations = []
-        
-        for relation in data:
-            try:
-                # Extract data from the relation
-                source_node = relation.get('source_node')
-                target_node = relation.get('target_node')
-                relation_type = relation.get('relation_type')
-                properties = relation.get('properties')
-                
-                # Validate required fields
-                if not source_node or not target_node or not relation_type:
-                    failed_relations.append({
-                        "relation": relation,
-                        "error": "Missing required fields (source_node, target_node, or relation_type)"
-                    })
-                    continue
-                
-                # Save the relation to MongoDB
-                saved = mongo_client.save_relation(source_node, target_node, relation_type, properties)
-                
-                if saved:
-                    success_count += 1
-                else:
-                    failed_relations.append({
-                        "relation": relation,
-                        "error": "Failed to save relation"
-                    })
-            except Exception as e:
-                failed_relations.append({
-                    "relation": relation,
-                    "error": str(e)
-                })
-        
-        response = jsonify({
-            "success": True,
-            "message": f"Successfully saved {success_count} relations to MongoDB",
-            "success_count": success_count,
-            "failed_count": len(failed_relations),
-            "failed_relations": failed_relations
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 200
-        
-    except Exception as e:
-        print(f"Error saving relations to MongoDB: {e}")
-        traceback.print_exc()
-        response = jsonify({"error": f"Error saving relations: {str(e)}"})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 500
-
-@app.route('/mongodb/find_relations', methods=['GET', 'OPTIONS'])
-def find_relations():
-    # Handle OPTIONS request for CORS preflight
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'success'})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'GET')
-        return response
-        
-    try:
-        query = request.args.get('query', '')
-        
-        if not query:
-            return jsonify({"error": "Query parameter is required"}), 400
-        
-        # Find the relations in MongoDB
-        relations = mongo_client.find_relations(query)
-        
-        response = jsonify({
-            "success": True,
-            "query": query,
-            "count": len(relations),
-            "relations": relations
-        })
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 200
-        
-    except Exception as e:
-        print(f"Error finding relations in MongoDB: {e}")
-        traceback.print_exc()
-        response = jsonify({"error": f"Error finding relations: {str(e)}"})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        return response, 500
-
-# Keep the Neo4j endpoints for backward compatibility
-@app.route('/neo4j/save_relations', methods=['POST', 'OPTIONS'])
-def save_relations_neo4j():
-    # Redirect to the MongoDB endpoint
-    return save_relations()
-
-@app.route('/neo4j/find_relations', methods=['GET', 'OPTIONS'])
-def find_relations_neo4j():
-    # Redirect to the MongoDB endpoint
-    return find_relations()
+@mcp.tool()
+def find_relations(query: str) -> dict:
+    """Find relations in MongoDB (DISABLED)."""
+    return {
+        "error": "MongoDB is disabled",
+        "message": "Relation queries are not available. MongoDB support has been disabled."
+    }
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True)
+    # Run the MCP server with HTTP transport
+    mcp.run(transport="http", host="10.0.0.1", port=2001)
