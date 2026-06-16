@@ -1,6 +1,8 @@
 from z3 import *
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+import argparse
 import json
+import os
 import traceback
 import re
 # Import the relation extraction functions
@@ -51,6 +53,9 @@ except LookupError:
 
 # Initialize the MCP server with HTTP transport
 mcp = FastMCP("z3_backend")
+SERVER_HOST = os.getenv("Z3_BACKEND_HOST", "10.0.0.1")
+SERVER_PORT = int(os.getenv("Z3_BACKEND_PORT", "2001"))
+SERVER_PATH = os.getenv("Z3_BACKEND_PATH", "/z3")
 
 # Global solver context for maintaining state between requests
 solver_context = {
@@ -1192,7 +1197,7 @@ def detect_negation_patterns(text):
     
     return result
 
-@mcp.tool()
+@mcp.tool
 def solver(equation: str) -> dict:
     """Solve a Z3 equation and return the result."""
     try:
@@ -1203,7 +1208,7 @@ def solver(equation: str) -> dict:
         traceback.print_exc()
         return {"message": f"Error: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def add_constraint(constraint: str) -> dict:
     """Add a constraint to the Z3 solver."""
     try:
@@ -1241,7 +1246,7 @@ def add_constraint(constraint: str) -> dict:
         traceback.print_exc()
         return {"message": f"Error adding constraint: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def check_satisfiability() -> dict:
     """Check the satisfiability of the current constraints."""
     try:
@@ -1279,7 +1284,7 @@ def check_satisfiability() -> dict:
         traceback.print_exc()
         return {"message": f"Error checking satisfiability: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def reset_solver() -> dict:
     """Reset the Z3 solver context."""
     try:
@@ -1290,7 +1295,7 @@ def reset_solver() -> dict:
         traceback.print_exc()
         return {"message": f"Error resetting solver: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def prove_theorem_tool(premises: list[str], conclusion: str) -> dict:
     """Prove a theorem given premises and a conclusion."""
     try:
@@ -1307,7 +1312,7 @@ def prove_theorem_tool(premises: list[str], conclusion: str) -> dict:
         traceback.print_exc()
         return {"message": f"Error proving theorem: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def convert_natural_language(premises: list[str], conclusion: str, use_lemmatization: bool = False) -> dict:
     """Convert natural language premises and conclusion to Z3 logic."""
     try:
@@ -1329,7 +1334,7 @@ def convert_natural_language(premises: list[str], conclusion: str, use_lemmatiza
         traceback.print_exc()
         return {"message": f"Error converting natural language: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def get_status() -> dict:
     """Return the current status of the solver context."""
     try:
@@ -1347,7 +1352,7 @@ def get_status() -> dict:
         traceback.print_exc()
         return {"message": f"Error getting status: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def extract_relations_tool(sentence: str) -> dict:
     """Extract relations from a sentence using spaCy on Linux or NLTK as fallback."""
     try:
@@ -1387,7 +1392,7 @@ def extract_relations_tool(sentence: str) -> dict:
         traceback.print_exc()
         return {"message": f"Error extracting relations: {str(e)}"}
 
-@mcp.tool()
+@mcp.tool
 def save_relations(relations: list[dict]) -> dict:
     """Save relations to MongoDB (DISABLED)."""
     return {
@@ -1395,7 +1400,7 @@ def save_relations(relations: list[dict]) -> dict:
         "message": "Relation storage is not available. MongoDB support has been disabled."
     }
 
-@mcp.tool()
+@mcp.tool
 def find_relations(query: str) -> dict:
     """Find relations in MongoDB (DISABLED)."""
     return {
@@ -1403,6 +1408,26 @@ def find_relations(query: str) -> dict:
         "message": "Relation queries are not available. MongoDB support has been disabled."
     }
 
+def run_server(transport: str | None = None) -> None:
+    """Start the FastMCP server using the selected transport."""
+    selected_transport = transport or os.getenv("Z3_BACKEND_TRANSPORT", "streamable-http")
+    if selected_transport in {"streamable-http", "http"}:
+        mcp.run(transport="http", path=SERVER_PATH, host=SERVER_HOST, port=SERVER_PORT)
+    else:
+        mcp.run(transport=selected_transport)
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Z3 backend MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http", "streamable-http"],
+        default=os.getenv("Z3_BACKEND_TRANSPORT", "streamable-http"),
+        help="Transport to use for FastMCP (default: streamable-http)",
+    )
+    args = parser.parse_args(argv)
+    run_server(args.transport)
+
+
 if __name__ == '__main__':
-    # Run the MCP server with HTTP transport
-    mcp.run(transport="http", host="10.0.0.1", port=2001)
+    main()
