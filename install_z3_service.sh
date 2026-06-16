@@ -18,6 +18,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_EXECUTABLE=$(which python3)
 USER="${SUDO_USER:-$USER}"
 
+# Server configuration (override before running, e.g. Z3_BACKEND_HOST=0.0.0.0 sudo -E bash install_z3_service.sh)
+Z3_BACKEND_HOST="${Z3_BACKEND_HOST:-0.0.0.0}"
+Z3_BACKEND_PORT="${Z3_BACKEND_PORT:-2001}"
+Z3_BACKEND_PATH="${Z3_BACKEND_PATH:-/z3}"
+Z3_BACKEND_TRANSPORT="${Z3_BACKEND_TRANSPORT:-streamable-http}"
+
 # Print colored output
 print_status() {
     echo -e "${GREEN}[✓]${NC} $1"
@@ -67,7 +73,7 @@ check_python_deps() {
 
     local missing_deps=()
 
-    for package in z3 nltk mcp; do
+    for package in z3 nltk fastmcp; do
         if ! python3 -c "import $package" 2>/dev/null; then
             missing_deps+=("$package")
         else
@@ -102,13 +108,17 @@ StartLimitIntervalSec=0
 Type=simple
 User=${USER}
 WorkingDirectory=${SCRIPT_DIR}
-ExecStart=${PYTHON_EXECUTABLE} ${SCRIPT_DIR}/z3_backend.py
+ExecStart=${PYTHON_EXECUTABLE} ${SCRIPT_DIR}/z3_backend.py --transport ${Z3_BACKEND_TRANSPORT}
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${SERVICE_NAME}
 Environment="PYTHONUNBUFFERED=1"
+Environment="Z3_BACKEND_HOST=${Z3_BACKEND_HOST}"
+Environment="Z3_BACKEND_PORT=${Z3_BACKEND_PORT}"
+Environment="Z3_BACKEND_PATH=${Z3_BACKEND_PATH}"
+Environment="Z3_BACKEND_TRANSPORT=${Z3_BACKEND_TRANSPORT}"
 
 [Install]
 WantedBy=multi-user.target
@@ -228,7 +238,8 @@ print_summary() {
     echo "Service File: /etc/systemd/system/${SERVICE_NAME}.service"
     echo "Working Directory: ${SCRIPT_DIR}"
     echo "User: ${USER}"
-    echo "Port: 5000"
+    echo "Transport: ${Z3_BACKEND_TRANSPORT}"
+    echo "Endpoint: http://${Z3_BACKEND_HOST}:${Z3_BACKEND_PORT}${Z3_BACKEND_PATH}"
     echo ""
     echo "=============================================="
     echo "Usage:"
