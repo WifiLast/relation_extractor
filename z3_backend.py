@@ -53,9 +53,9 @@ except LookupError:
 
 # Initialize the MCP server with HTTP transport
 mcp = FastMCP("z3_backend")
-SERVER_HOST = os.getenv("Z3_BACKEND_HOST", "10.0.0.1")
-SERVER_PORT = int(os.getenv("Z3_BACKEND_PORT", "2001"))
-SERVER_PATH = os.getenv("Z3_BACKEND_PATH", "/z3")
+SERVER_HOST = os.getenv("Z3_BACKEND_HOST", "10.0.0.10")
+SERVER_PORT = int(os.getenv("Z3_BACKEND_PORT", "2002"))
+SERVER_PATH = os.getenv("Z3_BACKEND_PATH", "/relation")
 
 # Global solver context for maintaining state between requests
 solver_context = {
