@@ -194,9 +194,55 @@ extract_relations_tool("John loves Mary")
 
 ---
 
+## Text Analysis Tools
+
+### 9. `analyze_subjectivity(text: str, use_ml_classifier: bool = False, include_sentences: bool = True) -> dict`
+**Description**: Analyze text for objectivity vs. subjectivity and emotional tone, using POS/lexicon
+heuristics plus NLTK's VADER sentiment analyzer. Optionally cross-checks with a Naive Bayes
+classifier trained on NLTK's subjectivity corpus.
+
+**Parameters**:
+- `text` (str): The text to analyze (one or more sentences)
+- `use_ml_classifier` (bool, optional): Also run the subjectivity-corpus classifier per sentence (default: False)
+- `include_sentences` (bool, optional): Include a per-sentence breakdown (default: True)
+
+**Returns**:
+```json
+{
+  "summary": {
+    "overall_subjectivity_score": 0.0,
+    "overall_subjectivity_label": "objective|mixed|subjective",
+    "subjective_sentence_ratio": 0.0,
+    "sentence_counts": {"total": 0, "subjective": 0, "objective": 0, "mixed": 0, "emotional": 0},
+    "overall_sentiment": {
+      "polarity": {"neg": 0.0, "neu": 0.0, "pos": 0.0, "compound": 0.0},
+      "emotion_label": "neutral|mildly positive|strongly positive|mildly negative|strongly negative",
+      "emotional_intensity": "none|low|moderate|high",
+      "is_emotional": false
+    }
+  },
+  "sentences": [
+    {
+      "sentence": "string",
+      "subjectivity_score": 0.0,
+      "subjectivity_label": "objective|mixed|subjective",
+      "cues": {"adjectives": 0, "adverbs": 0, "...": "..."},
+      "sentiment": {"polarity": {}, "emotion_label": "string", "emotional_intensity": "string", "is_emotional": false}
+    }
+  ]
+}
+```
+
+**Example**:
+```
+analyze_subjectivity("I absolutely love this new phone, it's amazing! The device weighs 180 grams.")
+```
+
+---
+
 ## Relation Storage Tools (DISABLED)
 
-### 9. `save_relations(relations: list[dict]) -> dict`
+### 10. `save_relations(relations: list[dict]) -> dict`
 **Status**: ⚠️ **DISABLED** (MongoDB integration disabled)
 
 **Description**: Save relations to MongoDB (not functional).
@@ -211,7 +257,7 @@ extract_relations_tool("John loves Mary")
 
 ---
 
-### 10. `find_relations(query: str) -> dict`
+### 11. `find_relations(query: str) -> dict`
 **Status**: ⚠️ **DISABLED** (MongoDB integration disabled)
 
 **Description**: Find relations in MongoDB by query (not functional).

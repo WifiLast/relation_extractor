@@ -7,6 +7,8 @@ import traceback
 import re
 # Import the relation extraction functions
 from spacy_relation_extract import extract_relations, is_linux, SPACY_AVAILABLE
+# Import subjectivity/sentiment analysis
+from text_subjectivity import analyze_text_subjectivity
 # import mongo_client  # MongoDB disabled
 
 
@@ -1391,6 +1393,33 @@ def extract_relations_tool(sentence: str) -> dict:
         print(f"Error extracting relations: {e}")
         traceback.print_exc()
         return {"message": f"Error extracting relations: {str(e)}"}
+
+@mcp.tool
+def analyze_subjectivity(text: str, use_ml_classifier: bool = False, include_sentences: bool = True) -> dict:
+    """
+    Analyze text for objectivity vs. subjectivity and emotional tone.
+
+    Uses POS/lexicon-based heuristics plus NLTK's VADER sentiment analyzer to determine
+    how subjective, opinionated, or emotional a piece of text is, per sentence and overall.
+
+    :param text: The text to analyze (one or more sentences).
+    :param use_ml_classifier: If True, also run a Naive Bayes classifier trained on NLTK's
+        subjectivity corpus for a second opinion (slower on first call, best-effort).
+    :param include_sentences: If True, include a per-sentence breakdown in the response.
+    """
+    try:
+        if not text or not text.strip():
+            return {"message": "No text provided"}
+
+        return analyze_text_subjectivity(
+            text,
+            use_ml_classifier=use_ml_classifier,
+            include_sentences=include_sentences,
+        )
+    except Exception as e:
+        print(f"Error analyzing subjectivity: {e}")
+        traceback.print_exc()
+        return {"message": f"Error analyzing subjectivity: {str(e)}"}
 
 @mcp.tool
 def save_relations(relations: list[dict]) -> dict:
