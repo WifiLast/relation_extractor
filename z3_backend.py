@@ -11,6 +11,15 @@ from spacy_relation_extract import extract_relations, is_linux, SPACY_AVAILABLE
 from text_subjectivity import analyze_text_subjectivity
 # import mongo_client  # MongoDB disabled
 
+# Layered extraction pipeline (plan.md §33 P1+P2): ontology + gold-corpus
+# infrastructure, and the deterministic L0/L3/L4 layers. L1/L2/L5-L8 are
+# later phases - extract_relations_tool below still falls back to the
+# spaCy/NLTK SVO pass above for plain prose until L5's ensemble RE lands.
+from l0_structure import normalize as l0_normalize
+from l3_entities import find_entities, resolve_compound_attributes
+from l4_quantities import find_quantities
+from gold_corpus import coverage_report as gold_coverage_report, missing_coverage as gold_missing_coverage
+
 
 # Import NLTK for natural language processing
 import nltk
@@ -56,7 +65,7 @@ except LookupError:
 # Initialize the MCP server with HTTP transport
 mcp = FastMCP("z3_backend")
 SERVER_HOST = os.getenv("Z3_BACKEND_HOST", "10.0.0.10")
-SERVER_PORT = int(os.getenv("Z3_BACKEND_PORT", "2002"))
+SERVER_PORT = int(os.getenv("Z3_BACKEND_PORT", "2006"))
 SERVER_PATH = os.getenv("Z3_BACKEND_PATH", "/relation")
 
 # Global solver context for maintaining state between requests
@@ -1354,45 +1363,107 @@ def get_status() -> dict:
         traceback.print_exc()
         return {"message": f"Error getting status: {str(e)}"}
 
+def _spans_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    return a[0] < b[1] and b[0] < a[1]
+
 @mcp.tool
-def extract_relations_tool(sentence: str) -> dict:
-    """Extract relations from a sentence using spaCy on Linux or NLTK as fallback."""
+def extract_relations_tool(sentence: str, locale: str = "en") -> dict:
+    """
+    Extract structured facts from text via the layered pipeline (plan.md §33
+    P1+P2): L0 structure normalization (Markdown/table/list/code handling),
+    L3 deterministic entities, and L4 quantity intervals. Falls back to a
+    legacy spaCy-on-Linux/NLTK subject-verb-object pass per proposition for
+    plain prose the deterministic layers don't cover on their own - full L2
+    decomposition and L5 ensemble relation extraction are later phases.
+
+    :param locale: "en" or "de" - controls number-format parsing in L4
+        (§24: "1.000" means 1000 in German, 1.0 in English).
+    """
     try:
         if not sentence:
             return {"message": "No sentence provided"}
 
         print(f"Extracting relations from: '{sentence}'")
 
-        # Extract relations
-        relations = extract_relations(sentence)
+        doc = l0_normalize(sentence)
 
-        # Format the response
-        formatted_relations = []
-        for subj, rel, obj in relations:
-            formatted_relations.append({
-                "subject": subj,
-                "relation": rel,
-                "object": obj
+        propositions = []
+        legacy_relations = []
+        for prop in doc.propositions:
+            entities = find_entities(prop.text)
+            quantities = find_quantities(prop.text, locale=locale)
+            # L3 identifiers (article numbers, versions, IPs...) are more
+            # specific than a generic numeric range/point guess, so an
+            # entity span wins over an overlapping quantity span - e.g. the
+            # article number "750-8212" must not also read as a numeric
+            # range 750-8212 (§23's "regex span wins" conflict rule, applied
+            # across layers since L4 has no identifier awareness of its own).
+            quantities = [
+                q for q in quantities
+                if not any(_spans_overlap((q.start, q.end), (e.start, e.end)) for e in entities)
+            ]
+            compounds = resolve_compound_attributes(prop.text)
+
+            propositions.append({
+                "text": prop.text,
+                "span": list(prop.span),
+                "kind": prop.kind,
+                "context_entity": prop.context_entity,
+                "parent_index": prop.parent_index,
+                "entities": [
+                    {"text": e.text, "label": e.label, "span": [e.start, e.end]}
+                    for e in entities
+                ],
+                "quantities": [
+                    {"text": q.text, "lo": q.lo, "hi": q.hi, "unit": q.unit,
+                     "form": q.form, "confidence": q.confidence, "ambiguous": q.ambiguous}
+                    for q in quantities
+                ],
+                "compound_attributes": [
+                    {"entity": ent, "predicate": pred} for ent, pred in compounds
+                ],
             })
 
-        # Include method information
-        method = "spaCy" if is_linux() and SPACY_AVAILABLE else "NLTK"
+            if prop.kind != "parenthetical":
+                for subj, rel, obj in extract_relations(prop.text):
+                    legacy_relations.append({"subject": subj, "relation": rel, "object": obj})
 
-        # Print debug info
-        print(f"Method used: {method}")
-        print(f"Found {len(formatted_relations)} relations:")
-        for relation in formatted_relations:
-            print(f"  {relation['subject']} --[{relation['relation']}]--> {relation['object']}")
+        method = "spaCy" if is_linux() and SPACY_AVAILABLE else "NLTK"
+        print(f"Method used (legacy SVO fallback): {method}")
+        print(f"Found {len(propositions)} proposition(s), {len(doc.facts)} table fact(s), "
+              f"{len(legacy_relations)} legacy relation(s)")
 
         return {
             "method": method,
-            "relations": formatted_relations,
-            "sentence": sentence
+            "propositions": propositions,
+            "table_facts": [
+                {"subject": f.subject, "predicate": f.predicate, "value": f.value,
+                 "source": f.source, "span": list(f.span)}
+                for f in doc.facts
+            ],
+            "code_blocks": [
+                {"content": content, "span": list(span)} for content, span in doc.code_blocks
+            ],
+            "placeholders": doc.placeholders,
+            "legacy_relations": legacy_relations,
+            "sentence": sentence,
         }
     except Exception as e:
         print(f"Error extracting relations: {e}")
         traceback.print_exc()
         return {"message": f"Error extracting relations: {str(e)}"}
+
+@mcp.tool
+def gold_corpus_status() -> dict:
+    """Coverage of the plan.md §30 edge-case categories in the seed gold
+    corpus (plan.md §33 P1 exit criterion: >= 10 examples per category).
+    The seed corpus only has illustrative examples, not the full annotated
+    set - this reports exactly how far it still is from that criterion."""
+    return {
+        "counts": gold_coverage_report(),
+        "still_needed": gold_missing_coverage(),
+        "min_examples_per_category": 10,
+    }
 
 @mcp.tool
 def analyze_subjectivity(text: str, use_ml_classifier: bool = False, include_sentences: bool = True) -> dict:
