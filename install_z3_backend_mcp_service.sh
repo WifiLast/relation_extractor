@@ -77,7 +77,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=false
-ReadWritePaths=$SCRIPT_DIR
+# L5 relation extraction (ReLiK/GLiREL) loads models through the Hugging Face
+# cache, which writes lock/ref files even for already-downloaded models.
+ReadWritePaths=$SCRIPT_DIR $(getent passwd "$SERVICE_USER" | cut -d: -f6)/.cache/huggingface
 
 [Install]
 WantedBy=multi-user.target

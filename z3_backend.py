@@ -12,12 +12,15 @@ from text_subjectivity import analyze_text_subjectivity
 # import mongo_client  # MongoDB disabled
 
 # Layered extraction pipeline (plan.md §33 P1+P2): ontology + gold-corpus
-# infrastructure, and the deterministic L0/L3/L4 layers. L1/L2/L5-L8 are
-# later phases - extract_relations_tool below still falls back to the
-# spaCy/NLTK SVO pass above for plain prose until L5's ensemble RE lands.
+# infrastructure, and the deterministic L0/L3/L4 layers. L5 is the neural
+# ensemble RE (ReLiK + GLiREL) and is the primary relation source;
+# extract_relations_tool falls back to the spaCy/NLTK SVO pass above only
+# when neither model is available or they find nothing in a proposition.
+# L1/L2/L6-L8 are later phases.
 from l0_structure import normalize as l0_normalize
 from l3_entities import find_entities, resolve_compound_attributes
 from l4_quantities import find_quantities
+import l5_relations
 from gold_corpus import coverage_report as gold_coverage_report, missing_coverage as gold_missing_coverage
 
 
@@ -1367,17 +1370,27 @@ def _spans_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
     return a[0] < b[1] and b[0] < a[1]
 
 @mcp.tool
-def extract_relations_tool(sentence: str, locale: str = "en") -> dict:
+def extract_relations_tool(
+    sentence: str,
+    locale: str = "en",
+    relation_labels: list[str] | None = None,
+    threshold: float | None = None,
+) -> dict:
     """
-    Extract structured facts from text via the layered pipeline (plan.md §33
-    P1+P2): L0 structure normalization (Markdown/table/list/code handling),
-    L3 deterministic entities, and L4 quantity intervals. Falls back to a
-    legacy spaCy-on-Linux/NLTK subject-verb-object pass per proposition for
-    plain prose the deterministic layers don't cover on their own - full L2
-    decomposition and L5 ensemble relation extraction are later phases.
+    Extract structured facts from text via the layered pipeline (plan.md §33):
+    L0 structure normalization (Markdown/table/list/code handling), L3
+    deterministic entities, L4 quantity intervals, and L5 neural relation
+    extraction - ReLiK (end-to-end, NYT relation inventory) plus GLiREL
+    (zero-shot over spaCy/ReLiK/L3 entities and noun chunks). The L5 triples
+    are the primary result ("relations"); the legacy spaCy/NLTK
+    subject-verb-object pass only fills in ("legacy_relations") for
+    propositions where L5 is unavailable or finds nothing.
 
     :param locale: "en" or "de" - controls number-format parsing in L4
         (§24: "1.000" means 1000 in German, 1.0 in English).
+    :param relation_labels: zero-shot relation labels for GLiREL (e.g.
+        ["controls", "part of", "located in"]); omit for the default set.
+    :param threshold: GLiREL score cutoff (default 0.5, env GLIREL_THRESHOLD).
     """
     try:
         if not sentence:
@@ -1387,10 +1400,24 @@ def extract_relations_tool(sentence: str, locale: str = "en") -> dict:
 
         doc = l0_normalize(sentence)
 
+        re_props = [p for p in doc.propositions if p.kind != "parenthetical"]
+        prop_entities = [find_entities(p.text) for p in doc.propositions]
+        re_entities = [e for p, e in zip(doc.propositions, prop_entities) if p.kind != "parenthetical"]
+        try:
+            neural = l5_relations.extract(
+                [p.text for p in re_props], re_entities,
+                labels=relation_labels, threshold=threshold,
+            )
+        except Exception as e:
+            print(f"L5 relation extraction failed, using legacy SVO: {e}")
+            traceback.print_exc()
+            neural = None
+        neural_by_prop = dict(zip(map(id, re_props), neural)) if neural is not None else {}
+
         propositions = []
+        relations = []
         legacy_relations = []
-        for prop in doc.propositions:
-            entities = find_entities(prop.text)
+        for index, (prop, entities) in enumerate(zip(doc.propositions, prop_entities)):
             quantities = find_quantities(prop.text, locale=locale)
             # L3 identifiers (article numbers, versions, IPs...) are more
             # specific than a generic numeric range/point guess, so an
@@ -1403,6 +1430,10 @@ def extract_relations_tool(sentence: str, locale: str = "en") -> dict:
                 if not any(_spans_overlap((q.start, q.end), (e.start, e.end)) for e in entities)
             ]
             compounds = resolve_compound_attributes(prop.text)
+
+            prop_relations = [r.as_dict() for r in neural_by_prop.get(id(prop), [])]
+            for r in prop_relations:
+                relations.append({**r, "proposition_index": index})
 
             propositions.append({
                 "text": prop.text,
@@ -1422,19 +1453,33 @@ def extract_relations_tool(sentence: str, locale: str = "en") -> dict:
                 "compound_attributes": [
                     {"entity": ent, "predicate": pred} for ent, pred in compounds
                 ],
+                "relations": prop_relations,
             })
 
-            if prop.kind != "parenthetical":
+            if prop.kind != "parenthetical" and not prop_relations:
                 for subj, rel, obj in extract_relations(prop.text):
-                    legacy_relations.append({"subject": subj, "relation": rel, "object": obj})
+                    legacy_relations.append({"subject": subj, "relation": rel, "object": obj,
+                                             "proposition_index": index})
 
-        method = "spaCy" if is_linux() and SPACY_AVAILABLE else "NLTK"
-        print(f"Method used (legacy SVO fallback): {method}")
+        legacy_method = "spaCy" if is_linux() and SPACY_AVAILABLE else "NLTK"
+        re_status = l5_relations.status()
+        neural_method = "+".join(
+            name for name, loaded in (("ReLiK", re_status["relik_loaded"]),
+                                      ("GLiREL", re_status["glirel_loaded"])) if loaded
+        )
+        if neural_method and legacy_relations:
+            method = f"{neural_method} (legacy {legacy_method} fallback for some propositions)"
+        elif neural_method:
+            method = neural_method
+        else:
+            method = f"{legacy_method} (L5 unavailable: {re_status['errors'] or 'not loaded'})"
+        print(f"Method used: {method}")
         print(f"Found {len(propositions)} proposition(s), {len(doc.facts)} table fact(s), "
-              f"{len(legacy_relations)} legacy relation(s)")
+              f"{len(relations)} L5 relation(s), {len(legacy_relations)} legacy relation(s)")
 
         return {
             "method": method,
+            "relations": relations,
             "propositions": propositions,
             "table_facts": [
                 {"subject": f.subject, "predicate": f.predicate, "value": f.value,
@@ -1452,6 +1497,13 @@ def extract_relations_tool(sentence: str, locale: str = "en") -> dict:
         print(f"Error extracting relations: {e}")
         traceback.print_exc()
         return {"message": f"Error extracting relations: {str(e)}"}
+
+@mcp.tool
+def relation_models_status(load: bool = False) -> dict:
+    """Status of the L5 relation-extraction models (ReLiK, GLiREL): which are
+    loaded, load errors, model ids and device. With load=True, load them now
+    (blocking) instead of waiting for the first extraction request."""
+    return l5_relations.load_models() if load else l5_relations.status()
 
 @mcp.tool
 def gold_corpus_status() -> dict:
@@ -1526,6 +1578,10 @@ def main(argv: list[str] | None = None) -> None:
         help="Transport to use for FastMCP (default: streamable-http)",
     )
     args = parser.parse_args(argv)
+    # Warm the L5 models in the background so the first extraction request
+    # doesn't block on loading two DeBERTa-large encoders.
+    if os.getenv("RE_PRELOAD", "1") != "0":
+        l5_relations.preload_async()
     run_server(args.transport)
 
 

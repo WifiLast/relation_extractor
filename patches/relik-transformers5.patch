@@ -1,0 +1,229 @@
+diff --git a/relik/reader/pytorch_modules/hf/modeling_relik.py b/relik/reader/pytorch_modules/hf/modeling_relik.py
+index 65a71cb..f554200 100644
+--- a/relik/reader/pytorch_modules/hf/modeling_relik.py
++++ b/relik/reader/pytorch_modules/hf/modeling_relik.py
+@@ -1,10 +1,40 @@
+ from typing import Any, Dict, Optional
+ 
+ import torch
+-from transformers import AutoModel, PreTrainedModel
++from transformers import AutoConfig, AutoModel, PreTrainedModel
+ from transformers.activations import ClippedGELUActivation, GELUActivation
+ from transformers.configuration_utils import PretrainedConfig
+-from transformers.modeling_utils import PoolerEndLogits
++
++try:
++    from transformers.modeling_utils import PoolerEndLogits
++except ImportError:
++    # transformers >= 5 removed PoolerEndLogits; vendored from transformers 4.x
++    # (identical parameter names, so pretrained ReLiK checkpoints still load).
++    class PoolerEndLogits(torch.nn.Module):
++        def __init__(self, config: PretrainedConfig):
++            super().__init__()
++            self.dense_0 = torch.nn.Linear(config.hidden_size * 2, config.hidden_size)
++            self.activation = torch.nn.Tanh()
++            self.LayerNorm = torch.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
++            self.dense_1 = torch.nn.Linear(config.hidden_size, 1)
++
++        def forward(self, hidden_states, start_states=None, start_positions=None, p_mask=None):
++            assert start_states is not None or start_positions is not None
++            if start_positions is not None:
++                slen, hsz = hidden_states.shape[-2:]
++                start_positions = start_positions[:, None, None].expand(-1, -1, hsz)
++                start_states = hidden_states.gather(-2, start_positions)
++                start_states = start_states.expand(-1, slen, -1)
++            x = self.dense_0(torch.cat([hidden_states, start_states], dim=-1))
++            x = self.activation(x)
++            x = self.LayerNorm(x)
++            x = self.dense_1(x).squeeze(-1)
++            if p_mask is not None:
++                if x.dtype == torch.float16:
++                    x = x * (1 - p_mask) - 65500 * p_mask
++                else:
++                    x = x * (1 - p_mask) - 1e30 * p_mask
++            return x
+ 
+ from .configuration_relik import RelikReaderConfig
+ 
+@@ -35,6 +65,89 @@ class RelikReaderSample:
+             self._d[key] = value
+ 
+ 
++def _backbone(name: str, num_layers: Optional[int] = None):
++    """Build the encoder backbone from its config only.
++
++    The outer ``from_pretrained`` of the ReLiK reader restores every weight,
++    backbone included, so pre-loading the backbone here is redundant - and
++    transformers >= 5 builds the outer model under a meta-device context,
++    where a nested ``from_pretrained`` raises.
++    """
++    kwargs = {} if num_layers is None else {"num_hidden_layers": num_layers}
++    return AutoModel.from_config(AutoConfig.from_pretrained(name, **kwargs))
++
++
++_EMBEDDING_KEY = "transformer_model.embeddings.word_embeddings.weight"
++
++
++def _checkpoint_vocab_rows(name_or_path, **hub_kwargs) -> Optional[int]:
++    """Row count of the reader checkpoint's word-embedding matrix.
++
++    ReLiK checkpoints can hold a padded embedding matrix (e.g. 128128 rows for
++    DeBERTa-v3's 128100 + 24 special symbols). Rebuilding the model with the
++    unpadded size makes ``from_pretrained(ignore_mismatched_sizes=True)``
++    silently drop the fine-tuned embeddings, so the size is read from the
++    checkpoint itself (header / mmap only - no full load).
++    """
++    from transformers.utils import cached_file
++
++    hub_kwargs = {
++        k: v
++        for k, v in hub_kwargs.items()
++        if k in ("cache_dir", "force_download", "local_files_only", "token", "revision", "subfolder")
++    }
++    for filename in ("model.safetensors", "pytorch_model.bin"):
++        try:
++            path = cached_file(
++                name_or_path,
++                filename,
++                _raise_exceptions_for_missing_entries=False,
++                **hub_kwargs,
++            )
++        except Exception:
++            path = None
++        if not path:
++            continue
++        try:
++            if filename.endswith(".safetensors"):
++                from safetensors import safe_open
++
++                with safe_open(path, framework="pt") as f:
++                    if _EMBEDDING_KEY in f.keys():
++                        return int(f.get_slice(_EMBEDDING_KEY).get_shape()[0])
++            else:
++                state = torch.load(path, map_location="cpu", mmap=True, weights_only=True)
++                if _EMBEDDING_KEY in state:
++                    return int(state[_EMBEDDING_KEY].shape[0])
++        except Exception:
++            pass
++    return None
++
++
++def _resize_backbone_embeddings(model, config, extra_symbols: int) -> None:
++    target = model.transformer_model.config.vocab_size + extra_symbols
++    target = max(target, getattr(config, "checkpoint_vocab_size", None) or 0)
++    # mean_resizing=False: the checkpoint overwrites these rows anyway, and the
++    # mean-init path cannot run on the meta tensors transformers >= 5 uses.
++    model.transformer_model.resize_token_embeddings(target, mean_resizing=False)
++
++
++class _CheckpointVocabMixin:
++    @classmethod
++    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
++        config = kwargs.get("config")
++        if not isinstance(config, PretrainedConfig):
++            config = cls.config_class.from_pretrained(pretrained_model_name_or_path, **{
++                k: v for k, v in kwargs.items()
++                if k in ("cache_dir", "force_download", "local_files_only", "token", "revision", "subfolder")
++            })
++            kwargs["config"] = config
++        rows = _checkpoint_vocab_rows(pretrained_model_name_or_path, **kwargs)
++        if rows:
++            config.checkpoint_vocab_size = rows
++        return super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
++
++
+ activation2functions = {
+     "relu": torch.nn.ReLU(),
+     "gelu": GELUActivation(),
+@@ -65,24 +178,15 @@ class PoolerEndLogitsBi(PoolerEndLogits):
+         return logits
+ 
+ 
+-class RelikReaderSpanModel(PreTrainedModel):
++class RelikReaderSpanModel(_CheckpointVocabMixin, PreTrainedModel):
+     config_class = RelikReaderConfig
+ 
+     def __init__(self, config: RelikReaderConfig, *args, **kwargs):
+         super().__init__(config)
+         # Transformer model declaration
+         self.config = config
+-        self.transformer_model = (
+-            AutoModel.from_pretrained(self.config.transformer_model)
+-            if self.config.num_layers is None
+-            else AutoModel.from_pretrained(
+-                self.config.transformer_model, num_hidden_layers=self.config.num_layers
+-            )
+-        )
+-        self.transformer_model.resize_token_embeddings(
+-            self.transformer_model.config.vocab_size
+-            + self.config.additional_special_symbols
+-        )
++        self.transformer_model = _backbone(self.config.transformer_model, self.config.num_layers)
++        _resize_backbone_embeddings(self, self.config, self.config.additional_special_symbols)
+ 
+         self.activation = self.config.activation
+         self.linears_hidden_size = self.config.linears_hidden_size
+@@ -104,6 +208,7 @@ class RelikReaderSpanModel(PreTrainedModel):
+         self.training = self.config.training
+ 
+         # criterion
++        self.post_init()  # required by transformers >= 5 (tied-weights bookkeeping)
+         self.criterion = torch.nn.CrossEntropyLoss()
+ 
+     def _get_projection_layer(
+@@ -456,7 +561,7 @@ class RelikReaderSpanModel(PreTrainedModel):
+         return output_dict
+ 
+ 
+-class RelikReaderREModel(PreTrainedModel):
++class RelikReaderREModel(_CheckpointVocabMixin, PreTrainedModel):
+     config_class = RelikReaderConfig
+ 
+     def __init__(self, config, *args, **kwargs):
+@@ -464,17 +569,11 @@ class RelikReaderREModel(PreTrainedModel):
+         # Transformer model declaration
+         # self.transformer_model_name = transformer_model
+         self.config = config
+-        self.transformer_model = (
+-            AutoModel.from_pretrained(config.transformer_model)
+-            if config.num_layers is None
+-            else AutoModel.from_pretrained(
+-                config.transformer_model, num_hidden_layers=config.num_layers
+-            )
+-        )
+-        self.transformer_model.resize_token_embeddings(
+-            self.transformer_model.config.vocab_size
+-            + config.additional_special_symbols
+-            + config.additional_special_symbols_types,
++        self.transformer_model = _backbone(config.transformer_model, config.num_layers)
++        _resize_backbone_embeddings(
++            self,
++            config,
++            config.additional_special_symbols + config.additional_special_symbols_types,
+         )
+ 
+         # named entity detection layers
+@@ -528,6 +627,7 @@ class RelikReaderREModel(PreTrainedModel):
+         # criterion
+         self.criterion = torch.nn.CrossEntropyLoss()
+         self.criterion_type = torch.nn.BCEWithLogitsLoss()
++        self.post_init()  # required by transformers >= 5 (tied-weights bookkeeping)
+ 
+     def _get_projection_layer(
+         self,
+diff --git a/relik/retriever/pytorch_modules/hf.py b/relik/retriever/pytorch_modules/hf.py
+index b5868d6..4200dc8 100644
+--- a/relik/retriever/pytorch_modules/hf.py
++++ b/relik/retriever/pytorch_modules/hf.py
+@@ -46,6 +46,11 @@ class GoldenRetrieverConfig(PretrainedConfig):
+         self.position_embedding_type = position_embedding_type
+         self.use_cache = use_cache
+         self.classifier_dropout = classifier_dropout
++        # transformers >= 5 no longer puts these on the base PretrainedConfig,
++        # but BertModel still reads them.
++        for attr in ("is_decoder", "add_cross_attention"):
++            if attr not in self.__dict__:
++                setattr(self, attr, kwargs.get(attr, False))
+ 
+ 
+ class GoldenRetrieverModel(BertModel):
