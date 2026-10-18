@@ -71,6 +71,8 @@ Environment="Z3_BACKEND_HOST=0.0.0.0"
 Environment="Z3_BACKEND_PORT=2002"
 Environment="Z3_BACKEND_PATH=/relation"
 Environment="Z3_BACKEND_TRANSPORT=streamable-http"
+# Keep ~/.local site-packages (an old torch 2.6) from shadowing the env's torch.
+Environment="PYTHONNOUSERSITE=1"
 
 # Security hardening
 NoNewPrivileges=true

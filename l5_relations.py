@@ -20,6 +20,7 @@ two DeBERTa-large encoders take a while to come up.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -136,7 +137,24 @@ def _load_glirel():
     if _state["glirel"] is None and "glirel" not in _state["errors"]:
         try:
             from glirel import GLiREL
-            model = GLiREL.from_pretrained(GLIREL_MODEL)
+            from huggingface_hub import snapshot_download
+
+            # GLiREL's hub loader always HEADs a config.json the repo doesn't
+            # have, so loading by repo id fails offline (e.g. DNS not up yet at
+            # boot) even with a complete cache. Load the cached snapshot dir.
+            try:
+                source = snapshot_download(GLIREL_MODEL, local_files_only=True)
+            except Exception:
+                source = GLIREL_MODEL
+            # The generic hub loader warns "config.json not found" for a local
+            # dir; GLiREL reads its own glirel_config.json, so that's noise.
+            hub_logger = logging.getLogger("huggingface_hub.hub_mixin")
+            prev_level = hub_logger.level
+            hub_logger.setLevel(logging.ERROR)
+            try:
+                model = GLiREL.from_pretrained(source)
+            finally:
+                hub_logger.setLevel(prev_level)
             model = model.to(_device())
             model.eval()
             _state["glirel"] = model

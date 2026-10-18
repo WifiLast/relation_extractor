@@ -1,3 +1,22 @@
+import os
+import sys
+# ~/.local/lib/python3.10 holds an old torch 2.6 (rocm6.2.4) that shadows the
+# env's torch when the user site is enabled, which breaks the L5 models
+# (torchaudio: libc10_cuda.so not found). systemd doesn't export
+# PYTHONNOUSERSITE, so re-exec once with it set; children inherit it too.
+if not sys.flags.no_user_site and os.environ.get("PYTHONNOUSERSITE") != "1":
+    os.environ["PYTHONNOUSERSITE"] = "1"
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+import z3 as _z3
+# Without z3-solver installed, `import z3` silently resolves to this repo's
+# z3/ frontend folder as an empty namespace package, and the failure only
+# shows up later as "NameError: name 'Solver' is not defined".
+if not hasattr(_z3, "Solver"):
+    sys.exit(
+        f"z3-solver is not installed for {sys.executable} - `import z3` resolved to "
+        f"{list(getattr(_z3, '__path__', [])) or _z3.__file__} instead. Run this with the "
+        f"service env (/mnt/data/miniconda3/envs/py310_amd/bin/python) or `pip install z3-solver`."
+    )
 from z3 import *
 from fastmcp import FastMCP
 from fastmcp import Client as _MCPClient

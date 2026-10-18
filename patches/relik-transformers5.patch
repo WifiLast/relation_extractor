@@ -1,8 +1,9 @@
 diff --git a/relik/reader/pytorch_modules/hf/modeling_relik.py b/relik/reader/pytorch_modules/hf/modeling_relik.py
-index 65a71cb..f554200 100644
+index 65a71cb..0163d7c 100644
 --- a/relik/reader/pytorch_modules/hf/modeling_relik.py
 +++ b/relik/reader/pytorch_modules/hf/modeling_relik.py
-@@ -1,10 +1,40 @@
+@@ -1,10 +1,41 @@
++import inspect
  from typing import Any, Dict, Optional
  
  import torch
@@ -45,7 +46,7 @@ index 65a71cb..f554200 100644
  
  from .configuration_relik import RelikReaderConfig
  
-@@ -35,6 +65,89 @@ class RelikReaderSample:
+@@ -35,6 +66,92 @@ class RelikReaderSample:
              self._d[key] = value
  
  
@@ -113,7 +114,10 @@ index 65a71cb..f554200 100644
 +    target = max(target, getattr(config, "checkpoint_vocab_size", None) or 0)
 +    # mean_resizing=False: the checkpoint overwrites these rows anyway, and the
 +    # mean-init path cannot run on the meta tensors transformers >= 5 uses.
-+    model.transformer_model.resize_token_embeddings(target, mean_resizing=False)
++    kwargs = {}
++    if "mean_resizing" in inspect.signature(model.transformer_model.resize_token_embeddings).parameters:
++        kwargs["mean_resizing"] = False  # transformers >= 4.46 only
++    model.transformer_model.resize_token_embeddings(target, **kwargs)
 +
 +
 +class _CheckpointVocabMixin:
@@ -135,7 +139,7 @@ index 65a71cb..f554200 100644
  activation2functions = {
      "relu": torch.nn.ReLU(),
      "gelu": GELUActivation(),
-@@ -65,24 +178,15 @@ class PoolerEndLogitsBi(PoolerEndLogits):
+@@ -65,24 +182,15 @@ class PoolerEndLogitsBi(PoolerEndLogits):
          return logits
  
  
@@ -163,7 +167,7 @@ index 65a71cb..f554200 100644
  
          self.activation = self.config.activation
          self.linears_hidden_size = self.config.linears_hidden_size
-@@ -104,6 +208,7 @@ class RelikReaderSpanModel(PreTrainedModel):
+@@ -104,6 +212,7 @@ class RelikReaderSpanModel(PreTrainedModel):
          self.training = self.config.training
  
          # criterion
@@ -171,7 +175,7 @@ index 65a71cb..f554200 100644
          self.criterion = torch.nn.CrossEntropyLoss()
  
      def _get_projection_layer(
-@@ -456,7 +561,7 @@ class RelikReaderSpanModel(PreTrainedModel):
+@@ -456,7 +565,7 @@ class RelikReaderSpanModel(PreTrainedModel):
          return output_dict
  
  
@@ -180,7 +184,7 @@ index 65a71cb..f554200 100644
      config_class = RelikReaderConfig
  
      def __init__(self, config, *args, **kwargs):
-@@ -464,17 +569,11 @@ class RelikReaderREModel(PreTrainedModel):
+@@ -464,17 +573,11 @@ class RelikReaderREModel(PreTrainedModel):
          # Transformer model declaration
          # self.transformer_model_name = transformer_model
          self.config = config
@@ -203,7 +207,7 @@ index 65a71cb..f554200 100644
          )
  
          # named entity detection layers
-@@ -528,6 +627,7 @@ class RelikReaderREModel(PreTrainedModel):
+@@ -528,6 +631,7 @@ class RelikReaderREModel(PreTrainedModel):
          # criterion
          self.criterion = torch.nn.CrossEntropyLoss()
          self.criterion_type = torch.nn.BCEWithLogitsLoss()
